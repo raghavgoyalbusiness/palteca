@@ -2,6 +2,8 @@
 (function () {
   'use strict';
   const C = window.PALTECA_CONTENT;
+  const DLG = window.PALTECA_DIALOGUES || {};
+  const G = window.PalStore;
   const $ = (s, r) => (r || document).querySelector(s);
   const el = (t, cls, html) => { const n = document.createElement(t); if (cls) n.className = cls; if (html != null) n.innerHTML = html; return n; };
 
@@ -10,6 +12,7 @@
   const crumb = $('#crumb');
   const backBtn = $('#backBtn');
   const themeToggle = $('#themeToggle');
+  const playerchip = $('#playerchip');
   const toastEl = $('#toast');
 
   /* The PALTECA method — Picture · Audio · Link · Try · Echo · Connect · Apply */
@@ -23,7 +26,7 @@
     { k: 'A', w: 'Apply', d: 'Lock it in' },
   ];
 
-  /* ---------- persistence ---------- */
+  /* ---------- word progress ---------- */
   const PKEY = 'palteca:progress:v1';
   function loadProg() { try { return JSON.parse(localStorage.getItem(PKEY)) || {}; } catch (e) { return {}; } }
   function saveProg(p) { try { localStorage.setItem(PKEY, JSON.stringify(p)); } catch (e) {} }
@@ -31,6 +34,54 @@
   function langProg(code) { if (!progress[code]) progress[code] = { learned: {}, strength: {} }; return progress[code]; }
   function markLearned(code, id) { const lp = langProg(code); lp.learned[id] = true; lp.strength[id] = Math.min((lp.strength[id] || 0) + 1, 5); saveProg(progress); }
   function bumpStrength(code, id, delta) { const lp = langProg(code); lp.strength[id] = Math.max(0, Math.min((lp.strength[id] || 0) + delta, 5)); lp.learned[id] = true; saveProg(progress); }
+  function wordsLearned(code) { return C.languages[code] ? Object.keys(langProg(code).learned).filter(id => langProg(code).learned[id]).length : 0; }
+
+  /* ---------- gamification glue ---------- */
+  function gatherStats() {
+    const codes = Object.keys(C.languages);
+    let wordsTotal = 0, wordsMax = 0, langComplete = 0, themesCompleted = 0;
+    const sets = {};
+    codes.forEach(code => {
+      const lp = langProg(code);
+      const ids = Object.keys(lp.learned).filter(id => lp.learned[id]);
+      sets[code] = new Set(ids);
+      const n = ids.length; wordsTotal += n; if (n > wordsMax) wordsMax = n;
+      const total = C.languages[code].items.length;
+      if (total > 0 && n >= total) langComplete++;
+      C.themes.forEach(t => {
+        const items = C.languages[code].items.filter(i => i.theme === t.id);
+        if (items.length && items.every(i => lp.learned[i.id])) themesCompleted++;
+      });
+    });
+    let polyglotCount = 0;
+    if (codes.length >= 3) {
+      const a = sets[codes[0]], b = sets[codes[1]], c = sets[codes[2]];
+      a.forEach(id => { if (b.has(id) && c.has(id)) polyglotCount++; });
+    }
+    let dTotal = 0, dMax = 0;
+    codes.forEach(code => { const done = (G.data.dialogues[code] || {}); const n = Object.keys(done).length; dTotal += n; if (n > dMax) dMax = n; });
+    return {
+      xp: G.data.xp, streak: G.streak(), perfect: G.data.perfectCount,
+      wordsTotal, wordsMaxPerLang: wordsMax, languagesComplete: langComplete,
+      themesCompleted, polyglotCount, dialoguesTotal: dTotal, dialoguesMaxPerLang: dMax,
+    };
+  }
+  function award(n, kind) {
+    if (!G) return;
+    G.addXp(n, kind);
+    const na = G.evaluate(gatherStats());
+    na.forEach(a => celebrateAch(a));
+    updatePlayerChip();
+  }
+  function celebrateAch(a) { toast('🏅 Achievement · ' + a.title, 3600, 'ach'); }
+
+  function updatePlayerChip() {
+    if (!G) { playerchip.hidden = true; return; }
+    const li = G.levelInfo();
+    if (state.view === 'home' || li.xp <= 0) { playerchip.hidden = true; return; }
+    playerchip.hidden = false;
+    playerchip.innerHTML = '<span class="lv">Lv ' + li.level + '</span> · <span class="flame">🔥' + G.streak() + '</span> · ⭐' + li.xp;
+  }
 
   /* ---------- theme ---------- */
   function initTheme() {
@@ -53,25 +104,21 @@
 
   /* ---------- toast ---------- */
   let toastT;
-  function toast(msg, ms) {
+  function toast(msg, ms, cls) {
     toastEl.textContent = msg; toastEl.hidden = false;
+    toastEl.className = 'toast' + (cls ? ' ' + cls : '');
     requestAnimationFrame(() => toastEl.classList.add('show'));
     clearTimeout(toastT);
     toastT = setTimeout(() => { toastEl.classList.remove('show'); setTimeout(() => (toastEl.hidden = true), 300); }, ms || 2600);
   }
 
-  /* ---------- speech synthesis (native pronunciation) ---------- */
+  /* ---------- speech synthesis ---------- */
   let VOICES = [];
   function refreshVoices() { VOICES = window.speechSynthesis ? speechSynthesis.getVoices() : []; }
-  if (window.speechSynthesis) {
-    refreshVoices();
-    speechSynthesis.onvoiceschanged = refreshVoices;
-  }
+  if (window.speechSynthesis) { refreshVoices(); speechSynthesis.onvoiceschanged = refreshVoices; }
   function pickVoice(bcp47) {
     if (!VOICES.length) refreshVoices();
-    const lang = bcp47.toLowerCase();
-    const base = lang.split('-')[0];
-    // exact match first, then base-language, prefer local/higher-quality
+    const lang = bcp47.toLowerCase(); const base = lang.split('-')[0];
     const cand = VOICES.filter(v => v.lang && v.lang.toLowerCase() === lang)
       .concat(VOICES.filter(v => v.lang && v.lang.toLowerCase().split('-')[0] === base));
     cand.sort((a, b) => (b.localService === true) - (a.localService === true));
@@ -83,112 +130,69 @@
     try { speechSynthesis.cancel(); } catch (e) {}
     const u = new SpeechSynthesisUtterance(text);
     u.lang = bcp47;
-    const v = pickVoice(bcp47);
-    if (v) u.voice = v;
-    u.rate = opts.rate != null ? opts.rate : 0.82; // a touch slow for learners
-    u.pitch = 1;
-    if (!v) {
-      // No matching voice installed — still attempt with lang, but warn once.
-      if (!speak._warned) { speak._warned = {}; }
-      if (!speak._warned[bcp47]) { speak._warned[bcp47] = 1; toast('Tip: install a ' + bcp47 + ' system voice for best audio'); }
-    }
+    const v = pickVoice(bcp47); if (v) u.voice = v;
+    u.rate = opts.rate != null ? opts.rate : 0.82; u.pitch = 1;
+    if (!v) { if (!speak._warned) speak._warned = {}; if (!speak._warned[bcp47]) { speak._warned[bcp47] = 1; toast('Tip: install a ' + bcp47 + ' system voice for best audio'); } }
     speechSynthesis.speak(u);
   }
 
-  /* ---------- speech recognition (pronunciation check) ---------- */
+  /* ---------- speech recognition ---------- */
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   const SR_SUPPORTED = !!SR;
   function normalize(s, code) {
     if (!s) return '';
     s = s.toLowerCase().trim();
-    if (code === 'zh') {
-      // keep Han characters only
-      const han = s.match(/[一-鿿]/g);
-      return han ? han.join('') : s.replace(/[\s，。！？、,.!?]/g, '');
-    }
-    // strip accents & punctuation for es/fr/en
+    if (code === 'zh') { const han = s.match(/[一-鿿]/g); return han ? han.join('') : s.replace(/[\s，。！？、,.!?]/g, ''); }
     s = s.normalize('NFD').replace(/[̀-ͯ]/g, '');
     s = s.replace(/['’‘\-–—.,!?¡¿;:"()]/g, ' ').replace(/\s+/g, ' ').trim();
     return s;
   }
   function levenshtein(a, b) {
-    const m = a.length, n = b.length;
-    if (!m) return n; if (!n) return m;
-    const d = new Array(n + 1);
-    for (let j = 0; j <= n; j++) d[j] = j;
-    for (let i = 1; i <= m; i++) {
-      let prev = d[0]; d[0] = i;
-      for (let j = 1; j <= n; j++) {
-        const tmp = d[j];
-        d[j] = Math.min(d[j] + 1, d[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
-        prev = tmp;
-      }
-    }
+    const m = a.length, n = b.length; if (!m) return n; if (!n) return m;
+    const d = new Array(n + 1); for (let j = 0; j <= n; j++) d[j] = j;
+    for (let i = 1; i <= m; i++) { let prev = d[0]; d[0] = i; for (let j = 1; j <= n; j++) { const tmp = d[j]; d[j] = Math.min(d[j] + 1, d[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1)); prev = tmp; } }
     return d[n];
   }
-  function similarity(a, b) {
-    if (!a && !b) return 1;
-    const L = Math.max(a.length, b.length) || 1;
-    return 1 - levenshtein(a, b) / L;
-  }
+  function similarity(a, b) { if (!a && !b) return 1; const L = Math.max(a.length, b.length) || 1; return 1 - levenshtein(a, b) / L; }
+  function scoreSpeech(alts, target, code) { let best = 0; (alts || []).forEach(a => { const s = similarity(normalize(a, code), normalize(target, code)); if (s > best) best = s; }); return best; }
 
   let activeRec = null;
-  function listen(bcp47, code, onDone) {
+  function listen(bcp47, onDone) {
     if (!SR_SUPPORTED) { onDone({ unsupported: true }); return null; }
-    let rec;
-    try { rec = new SR(); } catch (e) { onDone({ unsupported: true }); return null; }
+    let rec; try { rec = new SR(); } catch (e) { onDone({ unsupported: true }); return null; }
     rec.lang = bcp47; rec.interimResults = false; rec.maxAlternatives = 3; rec.continuous = false;
     let got = false;
-    rec.onresult = (ev) => {
-      got = true;
-      const alts = [];
-      const r = ev.results[0];
-      for (let i = 0; i < r.length; i++) alts.push(r[i].transcript);
-      onDone({ transcript: alts[0], alternatives: alts });
-    };
-    rec.onerror = (ev) => { onDone({ error: ev.error || 'error' }); };
+    rec.onresult = (ev) => { got = true; const alts = []; const r = ev.results[0]; for (let i = 0; i < r.length; i++) alts.push(r[i].transcript); onDone({ transcript: alts[0], alternatives: alts }); };
+    rec.onerror = (ev) => onDone({ error: ev.error || 'error' });
     rec.onend = () => { if (!got) onDone({ ended: true }); activeRec = null; };
     try { rec.start(); activeRec = rec; } catch (e) { onDone({ error: 'start' }); }
     return rec;
   }
   function stopListening() { if (activeRec) { try { activeRec.stop(); } catch (e) {} activeRec = null; } }
+  function stopAll() { stopListening(); try { speechSynthesis.cancel(); } catch (e) {} }
 
-  /* ---------- helpers ---------- */
+  /* ---------- content helpers ---------- */
   function themeItems(code, themeId) { return C.languages[code].items.filter(i => i.theme === themeId); }
-  function activeThemes(code) {
-    return C.themes.filter(t => themeItems(code, t.id).length > 0);
-  }
-  function langCompletion(code) {
-    const items = C.languages[code].items;
-    if (!items.length) return 0;
-    const lp = langProg(code);
-    const done = items.filter(i => lp.learned[i.id]).length;
-    return Math.round((done / items.length) * 100);
-  }
+  function activeThemes(code) { return C.themes.filter(t => themeItems(code, t.id).length > 0); }
+  function langCompletion(code) { const items = C.languages[code].items; if (!items.length) return 0; return Math.round((wordsLearned(code) / items.length) * 100); }
+  function shuffle(a) { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); const t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
 
-  /* ---------- navigation ---------- */
-  const state = { view: 'home', code: null, themeId: null };
-  function go(view, data) {
-    Object.assign(state, data || {});
-    state.view = view;
-    render();
-    window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
-  }
-  backBtn.addEventListener('click', () => {
-    stopListening(); try { speechSynthesis.cancel(); } catch (e) {}
-    if (state.view === 'themes') go('home');
-    else if (state.view === 'lesson' || state.view === 'review' || state.view === 'done') go('themes');
-    else go('home');
-  });
+  /* ---------- navigation (history stack) ---------- */
+  const state = { view: 'home', code: null, themeId: null, scenarioId: null };
+  let hist = [];
+  function scrollTop() { try { window.scrollTo({ top: 0, behavior: 'auto' }); } catch (e) { window.scrollTo(0, 0); } }
+  function go(view, data) { hist.push({ view: state.view, code: state.code, themeId: state.themeId, scenarioId: state.scenarioId }); Object.assign(state, data || {}); state.view = view; render(); scrollTop(); }
+  function back() { stopAll(); if (hist.length) { Object.assign(state, hist.pop()); render(); scrollTop(); } else { state.view = 'home'; render(); scrollTop(); } }
+  backBtn.addEventListener('click', back);
+  playerchip.addEventListener('click', () => { if (state.view !== 'stats') go('stats'); });
 
   function render() {
     const isHome = state.view === 'home';
-    topbar.hidden = false; // bar stays (holds the theme toggle); Back is hidden on home
+    topbar.hidden = false;
     backBtn.style.visibility = isHome ? 'hidden' : 'visible';
-    if (state.view === 'home') renderHome();
-    else if (state.view === 'themes') renderThemes();
-    else if (state.view === 'lesson') renderLesson();
-    else if (state.view === 'review') renderReview();
+    const map = { home: renderHome, themes: renderThemes, lesson: renderLesson, review: renderReview, stats: renderStats, achievements: renderAchievements, dialogues: renderDialogues, dialogue: renderDialogue, quiz: renderQuiz };
+    (map[state.view] || renderHome)();
+    updatePlayerChip();
   }
 
   /* ===================== HOME ===================== */
@@ -202,35 +206,20 @@
     hero.appendChild(el('p', 'tagline', 'Learn to <b>speak</b> a language the visual way — see it, hear it, and say it out loud.'));
     wrap.appendChild(hero);
 
-    // method card
-    wrap.appendChild(el('div', 'section-label', 'The Palteca Method'));
-    const m = el('div', 'method');
-    m.appendChild(el('h3', null, 'See it → Hear it → Say it'));
-    m.appendChild(el('p', null, 'Every word travels through seven quick steps so it sticks in your mouth, not just your notebook. No translation crutch — you link the picture straight to the sound.'));
-    const steps = el('div', 'steps');
-    PAL.forEach(s => {
-      const st = el('div', 'step');
-      st.appendChild(el('div', 'k', s.k));
-      st.appendChild(el('div', 'w', s.w));
-      st.appendChild(el('div', 'd', s.d));
-      steps.appendChild(st);
-    });
-    m.appendChild(steps);
-    wrap.appendChild(m);
+    // player card
+    if (G) wrap.appendChild(playerCard());
 
     // languages
     wrap.appendChild(el('div', 'section-label', 'Choose a language'));
     const grid = el('div', 'lang-grid');
     Object.keys(C.languages).forEach(code => {
-      const L = C.languages[code];
-      const pct = langCompletion(code);
+      const L = C.languages[code]; const pct = langCompletion(code);
       const card = el('button', 'lang-card');
       card.appendChild(el('div', 'flag', L.flag || '🌐'));
       const info = el('div');
       info.appendChild(el('div', 'name', L.language));
       info.appendChild(el('div', 'native', (L.native || '') + ' · ' + L.items.length + ' words'));
-      const bar = el('div', 'bar'); const fill = el('i'); fill.style.width = pct + '%'; bar.appendChild(fill);
-      info.appendChild(bar);
+      const bar = el('div', 'bar'); const fill = el('i'); fill.style.width = pct + '%'; bar.appendChild(fill); info.appendChild(bar);
       info.appendChild(el('div', 'pct', pct > 0 ? pct + '% learned' : 'Start learning →'));
       card.appendChild(info);
       card.addEventListener('click', () => go('themes', { code, themeId: null }));
@@ -238,14 +227,77 @@
     });
     wrap.appendChild(grid);
 
+    // global nav
+    const nav = el('div', 'home-nav');
+    nav.appendChild(modeCard('📊', 'Progress', 'stats & streaks', () => go('stats')));
+    nav.appendChild(modeCard('🏅', 'Achievements', badgeSummary(), () => go('achievements')));
+    wrap.appendChild(nav);
+
+    // method
+    wrap.appendChild(el('div', 'section-label', 'The Palteca Method'));
+    const m = el('div', 'method');
+    m.appendChild(el('h3', null, 'See it → Hear it → Say it'));
+    m.appendChild(el('p', null, 'Every word travels through seven quick steps so it sticks in your mouth, not just your notebook. No translation crutch — you link the picture straight to the sound.'));
+    const steps = el('div', 'steps');
+    PAL.forEach(s => { const st = el('div', 'step'); st.appendChild(el('div', 'k', s.k)); st.appendChild(el('div', 'w', s.w)); st.appendChild(el('div', 'd', s.d)); steps.appendChild(st); });
+    m.appendChild(steps);
+    wrap.appendChild(m);
+
+    // install
+    if (window.__canInstall) {
+      const ib = el('button', 'install-btn', '⬇️ Install Palteca as an app');
+      ib.addEventListener('click', () => window.__promptInstall && window.__promptInstall());
+      wrap.appendChild(ib);
+    }
+
     wrap.appendChild(el('div', 'footer', SR_SUPPORTED
-      ? '🎤 Speaking practice is on. Best in Chrome. Your voice never leaves the pronunciation check.'
+      ? '🎤 Speaking practice is on — best in Chrome. Works offline once installed.'
       : '🔊 Listening & pronunciation coaching enabled. For live speech scoring, open in Chrome.'));
 
     views.replaceChildren(wrap);
   }
 
-  /* ===================== THEMES ===================== */
+  function badgeSummary() {
+    const list = G ? G.achievementsFor(gatherStats()) : [];
+    const on = list.filter(a => a.unlocked).length;
+    return on + ' / ' + (list.length || G.ACHIEVEMENTS.length) + ' unlocked';
+  }
+
+  function playerCard() {
+    const li = G.levelInfo(); const st = G.streak();
+    const card = el('div', 'player');
+    const top = el('div', 'player-top');
+    const ring = el('div', 'lvl-ring'); ring.style.setProperty('--p', li.pct); ring.appendChild(el('b', null, '' + li.level));
+    top.appendChild(ring);
+    const id = el('div', 'player-id');
+    id.appendChild(el('div', 'rank', li.rankEmoji + ' ' + li.rank));
+    id.appendChild(el('div', 'sub', 'Level ' + li.level + ' · ' + li.into + '/' + li.need + ' XP to level ' + (li.level + 1)));
+    top.appendChild(id);
+    card.appendChild(top);
+
+    const tiles = el('div', 'player-tiles');
+    const t1 = el('div', 'ptile flame'); t1.innerHTML = '<b>' + st + '</b><div class="lab">day streak</div>'; tiles.appendChild(t1);
+    const t2 = el('div', 'ptile xp'); t2.innerHTML = '<b>' + li.xp + '</b><div class="lab">total XP</div>'; tiles.appendChild(t2);
+    const todayXp = (G.data.days[G.isoToday()] && G.data.days[G.isoToday()].xp) || 0;
+    const goalPct = Math.min(100, Math.round(todayXp / G.data.dailyGoal * 100));
+    const t3 = el('div', 'ptile'); const gr = el('div', 'goalring'); gr.style.setProperty('--p', goalPct);
+    t3.appendChild(gr); t3.appendChild(el('div', 'lab', todayXp + '/' + G.data.dailyGoal + ' today')); tiles.appendChild(t3);
+    card.appendChild(tiles);
+    card.addEventListener('click', () => go('stats'));
+    card.style.cursor = 'pointer';
+    return card;
+  }
+
+  function modeCard(icon, title, sub, onClick, disabled) {
+    const b = el('button', 'mode-card');
+    b.appendChild(el('div', 'mi', icon));
+    b.appendChild(el('div', 'mt', title));
+    if (sub) b.appendChild(el('div', 'ms', sub));
+    if (disabled) b.disabled = true; else b.addEventListener('click', onClick);
+    return b;
+  }
+
+  /* ===================== THEMES + modes ===================== */
   function renderThemes() {
     const L = C.languages[state.code];
     crumb.textContent = L.language;
@@ -255,93 +307,72 @@
     head.appendChild(el('div', 'flag', L.flag || '🌐'));
     const ht = el('div');
     ht.appendChild(el('div', 't', L.language));
-    ht.appendChild(el('div', 's', langCompletion(state.code) + '% learned · pick a topic to practice speaking'));
+    ht.appendChild(el('div', 's', langCompletion(state.code) + '% learned · ' + wordsLearned(state.code) + ' of ' + L.items.length + ' words'));
     head.appendChild(ht);
     wrap.appendChild(head);
 
+    // modes
+    const modes = el('div', 'modes');
+    const nScen = (DLG[state.code] || []).length;
+    modes.appendChild(modeCard('💬', 'Conversations', nScen + ' role-plays', () => go('dialogues', { code: state.code })));
+    modes.appendChild(modeCard('🎯', 'Challenge', 'quiz yourself', () => startQuiz(state.code)));
+    modes.appendChild(modeCard('🔁', 'Review', 'spaced practice', () => startReview(state.code), Object.keys(langProg(state.code).learned).length < 3));
+    modes.appendChild(modeCard('📊', 'Progress', 'your stats', () => go('stats')));
+    wrap.appendChild(modes);
+
+    wrap.appendChild(el('div', 'section-label', 'Lessons'));
     const grid = el('div', 'theme-grid');
     activeThemes(state.code).forEach(t => {
-      const items = themeItems(state.code, t.id);
-      const lp = langProg(state.code);
-      const done = items.filter(i => lp.learned[i.id]).length;
-      const pct = Math.round((done / items.length) * 100);
+      const items = themeItems(state.code, t.id); const lp = langProg(state.code);
+      const done = items.filter(i => lp.learned[i.id]).length; const pct = Math.round((done / items.length) * 100);
       const card = el('button', 'theme-card');
       card.appendChild(el('div', 'ic', t.icon));
       card.appendChild(el('div', 'tt', t.title));
       const meta = el('div', 'meta');
-      const ring = el('div', 'ring' + (pct >= 100 ? ' done' : ''));
-      ring.style.setProperty('--p', pct);
+      const ring = el('div', 'ring' + (pct >= 100 ? ' done' : '')); ring.style.setProperty('--p', pct);
       if (pct >= 100) ring.textContent = '';
-      meta.appendChild(ring);
-      meta.appendChild(el('div', 'cnt', done + ' / ' + items.length));
+      meta.appendChild(ring); meta.appendChild(el('div', 'cnt', done + ' / ' + items.length));
       card.appendChild(meta);
       card.addEventListener('click', () => startLesson(state.code, t.id));
       grid.appendChild(card);
     });
     wrap.appendChild(grid);
-
-    // review
-    const lp = langProg(state.code);
-    const learnedCount = Object.keys(lp.learned).length;
-    const rv = el('button', 'review-cta');
-    rv.innerHTML = '🔁 Review everything you\'ve learned' + (learnedCount ? ' (' + learnedCount + ')' : '');
-    rv.disabled = learnedCount < 3;
-    if (learnedCount < 3) rv.innerHTML = '🔒 Learn a few words to unlock Review';
-    rv.addEventListener('click', () => startReview(state.code));
-    wrap.appendChild(rv);
-
     views.replaceChildren(wrap);
   }
 
   /* ===================== LESSON (PALTECA loop) ===================== */
-  const lesson = { code: null, items: [], idx: 0, correct: 0, spoken: 0 };
+  const lesson = { code: null, items: [], idx: 0, correct: 0, spoken: 0, perf: null };
   function startLesson(code, themeId) {
-    lesson.code = code; lesson.themeId = themeId;
-    lesson.items = themeItems(code, themeId).slice();
-    lesson.idx = 0; lesson.correct = 0; lesson.spoken = 0;
+    lesson.code = code; lesson.themeId = themeId; lesson.items = themeItems(code, themeId).slice();
+    lesson.idx = 0; lesson.correct = 0; lesson.spoken = 0; lesson.perf = {};
     go('lesson', { code, themeId });
   }
-
   function renderLesson() {
     const L = C.languages[lesson.code];
     const theme = C.themes.find(t => t.id === lesson.themeId);
     crumb.textContent = L.language + ' · ' + (theme ? theme.title : '');
-
     if (lesson.idx >= lesson.items.length) return renderDone();
 
     const item = lesson.items[lesson.idx];
-    const stepDone = { P: false, A: false, L: false, T: false, E: false, C: false, A2: false };
-
     const wrap = el('div');
 
-    // progress
     const pt = el('div', 'progress-top');
-    const bar = el('div', 'bar'); const fill = el('i');
-    fill.style.width = ((lesson.idx) / lesson.items.length * 100) + '%'; bar.appendChild(fill);
-    pt.appendChild(bar);
-    pt.appendChild(el('div', 'num', (lesson.idx + 1) + ' / ' + lesson.items.length));
+    const bar = el('div', 'bar'); const fill = el('i'); fill.style.width = (lesson.idx / lesson.items.length * 100) + '%'; bar.appendChild(fill);
+    pt.appendChild(bar); pt.appendChild(el('div', 'num', (lesson.idx + 1) + ' / ' + lesson.items.length));
     wrap.appendChild(pt);
 
-    // pal tracker
     const track = el('div', 'paltrack');
-    const palEls = PAL.map((s, i) => {
-      const p = el('div', 'pal', s.k); p.title = s.w; p.dataset.i = i; track.appendChild(p); return p;
-    });
+    const palEls = PAL.map((s, i) => { const p = el('div', 'pal', s.k); p.title = s.w; track.appendChild(p); return p; });
     wrap.appendChild(track);
     let curStep = 0;
-    function setStep(i) {
-      curStep = i;
-      palEls.forEach((p, k) => { p.dataset.on = k <= i ? '1' : '0'; p.dataset.cur = k === i ? '1' : '0'; });
-    }
+    function setStep(i) { curStep = i; palEls.forEach((p, k) => { p.dataset.on = k <= i ? '1' : '0'; p.dataset.cur = k === i ? '1' : '0'; }); }
 
-    // card
     const card = el('div', 'card');
     card.appendChild(el('div', 'pic', item.emoji || '🗣️'));
     card.appendChild(el('div', 'target', item.target));
     card.appendChild(el('div', 'phon', item.phonetic || ''));
     if (item.note) card.appendChild(el('div', 'note-pin', item.note));
 
-    // speak row
     const row = el('div', 'speak-row');
     const playBtn = el('button', 'btn play', '🔊 Listen');
     const slowBtn = el('button', 'btn ghost', '🐢 Slow');
@@ -349,246 +380,493 @@
     row.appendChild(playBtn); row.appendChild(slowBtn); row.appendChild(micBtn);
     card.appendChild(row);
 
-    // feedback
-    const fb = el('div', 'feedback');
-    card.appendChild(fb);
+    const fb = el('div', 'feedback'); card.appendChild(fb);
 
-    // reveal (Link + Connect)
-    const revealBtn = el('button', 'btn ghost', '👁️ Tap to reveal the meaning');
-    revealBtn.style.marginTop = '14px';
+    const revealBtn = el('button', 'btn ghost', '👁️ Tap to reveal the meaning'); revealBtn.style.marginTop = '14px';
     card.appendChild(revealBtn);
-
     const reveal = el('div', 'reveal'); reveal.style.display = 'none';
-    const trans = el('div', 'trans', item.translation + (item.article ? ' ' : ''));
-    if (item.article) { const a = el('span', 'art', ' · ' + item.article + ' ' + item.target); trans.appendChild(a); }
+    const trans = el('div', 'trans', item.translation);
+    if (item.article) trans.appendChild(el('span', 'art', ' · ' + item.article + ' ' + item.target));
     reveal.appendChild(trans);
-    const ex = el('div', 'example');
-    const exT = el('div', 'ex-t');
-    exT.appendChild(el('div', 'ex-x', item.example || ''));
-    exT.appendChild(el('div', 'ex-e', item.exampleTranslation || ''));
-    const exMini = el('button', 'mini', '🔊');
-    ex.appendChild(exT); ex.appendChild(exMini);
-    if (item.example) reveal.appendChild(ex);
+    if (item.example) {
+      const ex = el('div', 'example'); const exT = el('div', 'ex-t');
+      exT.appendChild(el('div', 'ex-x', item.example)); exT.appendChild(el('div', 'ex-e', item.exampleTranslation || ''));
+      const exMini = el('button', 'mini', '🔊'); ex.appendChild(exT); ex.appendChild(exMini); reveal.appendChild(ex);
+      exMini.addEventListener('click', () => { speak(item.example, L.bcp47, { rate: 0.85 }); if (curStep < 5) setStep(5); });
+    }
     card.appendChild(reveal);
-
     wrap.appendChild(card);
 
-    // nav
     const nav = el('div', 'nav-row');
     const skipBtn = el('button', 'btn sec', 'Skip');
     const nextBtn = el('button', 'btn primary', (lesson.idx === lesson.items.length - 1 ? 'Finish ✓' : 'Next →'));
-    nav.appendChild(skipBtn); nav.appendChild(nextBtn);
-    wrap.appendChild(nav);
-
-    wrap.appendChild(el('div', 'hint', SR_SUPPORTED
-      ? 'Hear it, then tap 🎤 and repeat. We\'ll score how close you got.'
-      : 'Tap 🔊 and repeat aloud. Reveal the meaning once you\'ve tried.'));
+    nav.appendChild(skipBtn); nav.appendChild(nextBtn); wrap.appendChild(nav);
+    wrap.appendChild(el('div', 'hint', SR_SUPPORTED ? 'Hear it, then tap 🎤 and repeat. We\'ll score how close you got.' : 'Tap 🔊 and repeat aloud. Reveal the meaning once you\'ve tried.'));
 
     views.replaceChildren(wrap);
 
-    // ---- behavior ----
-    setStep(0); // Picture shown
-    // auto play audio shortly after render (Audio step)
+    setStep(0);
     setTimeout(() => { speak(item.target, L.bcp47); if (curStep < 1) setStep(1); }, 320);
-
     playBtn.addEventListener('click', () => { speak(item.target, L.bcp47); if (curStep < 1) setStep(1); });
     slowBtn.addEventListener('click', () => { speak(item.target, L.bcp47, { rate: 0.55 }); if (curStep < 1) setStep(1); });
-    exMini.addEventListener('click', () => { speak(item.example, L.bcp47, { rate: 0.85 }); if (curStep < 5) setStep(5); });
-
-    revealBtn.addEventListener('click', () => {
-      reveal.style.display = 'block';
-      revealBtn.style.display = 'none';
-      if (curStep < 2) setStep(2); // Link
-    });
+    revealBtn.addEventListener('click', () => { reveal.style.display = 'block'; revealBtn.style.display = 'none'; if (curStep < 2) setStep(2); });
 
     let recording = false;
     micBtn.addEventListener('click', () => {
-      if (!SR_SUPPORTED) {
-        // self-check fallback
-        if (curStep < 4) setStep(4);
-        showFeedback('mid', '👍 Nice try! Tap 🔊 to compare with the native pronunciation.', '');
-        lesson.spoken++;
-        return;
-      }
+      if (!SR_SUPPORTED) { if (curStep < 4) setStep(4); showFeedback(fb, 'mid', '👍 Nice try! Tap 🔊 to compare with the native pronunciation.'); lesson.spoken++; return; }
       if (recording) { stopListening(); return; }
-      recording = true;
-      micBtn.classList.add('rec'); micBtn.textContent = '● Listening…';
-      if (curStep < 3) setStep(3); // Try
-      listen(L.bcp47, lesson.code, (res) => {
-        recording = false;
-        micBtn.classList.remove('rec'); micBtn.textContent = '🎤 Say it';
-        if (res.unsupported) { showFeedback('mid', 'Live scoring needs Chrome. Repeat after the audio instead 🔊', ''); return; }
-        if (res.error === 'not-allowed' || res.error === 'service-not-allowed') { showFeedback('bad', '🎤 Microphone blocked. Allow mic access to practice speaking.', ''); return; }
-        if (res.error || res.ended || !res.transcript) { showFeedback('mid', 'Didn\'t catch that — try again a bit louder 🔊', ''); return; }
+      recording = true; micBtn.classList.add('rec'); micBtn.textContent = '● Listening…'; if (curStep < 3) setStep(3);
+      listen(L.bcp47, (res) => {
+        recording = false; micBtn.classList.remove('rec'); micBtn.textContent = '🎤 Say it';
+        if (res.unsupported) return showFeedback(fb, 'mid', 'Live scoring needs Chrome. Repeat after the audio 🔊');
+        if (res.error === 'not-allowed' || res.error === 'service-not-allowed') return showFeedback(fb, 'bad', '🎤 Microphone blocked. Allow mic access to practice speaking.');
+        if (res.error || res.ended || !res.transcript) return showFeedback(fb, 'mid', 'Didn\'t catch that — try again a bit louder 🔊');
         lesson.spoken++;
-        // score against best alternative
-        const target = normalize(item.target, lesson.code);
-        let best = 0, heard = res.transcript;
-        (res.alternatives || [res.transcript]).forEach(a => {
-          const s = similarity(normalize(a, lesson.code), target);
-          if (s > best) { best = s; }
-        });
-        setStep(4); // Echo
+        const best = scoreSpeech(res.alternatives || [res.transcript], item.target, lesson.code);
+        setStep(4);
         if (best >= 0.8) {
-          lesson.correct++;
-          bumpStrength(lesson.code, item.id, 1);
-          showFeedback('good', '🎉 ¡Excelente! That sounded great.', 'Heard: “' + heard + '”');
-        } else if (best >= 0.5) {
-          showFeedback('mid', '👏 Close! Listen once more and echo the rhythm.', 'Heard: “' + heard + '”');
-        } else {
-          showFeedback('bad', '🔁 Not quite — tap 🐢 Slow, then try again.', 'Heard: “' + heard + '”');
-        }
+          lesson.correct++; bumpStrength(lesson.code, item.id, 1);
+          if (!lesson.perf[item.id]) { lesson.perf[item.id] = 1; award(5, 'perfect'); }
+          showFeedback(fb, 'good', '🎉 Great! That sounded spot on.', 'Heard: “' + res.transcript + '”');
+        } else if (best >= 0.5) showFeedback(fb, 'mid', '👏 Close! Listen once more and echo the rhythm.', 'Heard: “' + res.transcript + '”');
+        else showFeedback(fb, 'bad', '🔁 Not quite — tap 🐢 Slow, then try again.', 'Heard: “' + res.transcript + '”');
       });
     });
 
-    function showFeedback(kind, msg, heard) {
-      fb.className = 'feedback show ' + kind;
-      fb.innerHTML = '<div>' + msg + (heard ? '<span class="heard">' + heard + '</span>' : '') + '</div>';
-    }
-
     function advance() {
-      stopListening(); try { speechSynthesis.cancel(); } catch (e) {}
-      setStep(6); // Apply
+      stopAll(); setStep(6);
+      const wasLearned = langProg(lesson.code).learned[item.id];
       markLearned(lesson.code, item.id);
-      lesson.idx++;
-      renderLesson();
+      if (!wasLearned) award(10, 'word'); else { G && G.evaluate(gatherStats()); }
+      lesson.idx++; renderLesson();
     }
     nextBtn.addEventListener('click', advance);
-    skipBtn.addEventListener('click', () => { stopListening(); try { speechSynthesis.cancel(); } catch (e) {} lesson.idx++; renderLesson(); });
+    skipBtn.addEventListener('click', () => { stopAll(); lesson.idx++; renderLesson(); });
   }
+  function showFeedback(fb, kind, msg, heard) { fb.className = 'feedback show ' + kind; fb.innerHTML = '<div>' + msg + (heard ? '<span class="heard">' + heard + '</span>' : '') + '</div>'; }
 
   function renderDone() {
-    const L = C.languages[lesson.code];
-    const theme = C.themes.find(t => t.id === lesson.themeId);
+    const L = C.languages[lesson.code]; const theme = C.themes.find(t => t.id === lesson.themeId);
     crumb.textContent = L.language + ' · done';
     const wrap = el('div', 'done');
     wrap.appendChild(el('div', 'big', '🥑'));
     wrap.appendChild(el('h2', null, '¡Lesson complete!'));
     wrap.appendChild(el('p', null, 'You worked through ' + lesson.items.length + ' words in ' + (theme ? theme.title : 'this topic') + '. Keep them fresh with a quick review.'));
     const stats = el('div', 'stat-row');
-    const s1 = el('div', 'stat'); s1.innerHTML = '<b>' + lesson.items.length + '</b><span>words seen</span>';
-    const s2 = el('div', 'stat'); s2.innerHTML = '<b>' + lesson.spoken + '</b><span>times you spoke</span>';
-    const s3 = el('div', 'stat'); s3.innerHTML = '<b>' + langCompletion(lesson.code) + '%</b><span>of ' + L.language + '</span>';
-    stats.appendChild(s1); stats.appendChild(s2); stats.appendChild(s3);
+    stats.appendChild(statBox(lesson.items.length, 'words seen'));
+    stats.appendChild(statBox(lesson.spoken, 'times you spoke'));
+    stats.appendChild(statBox(langCompletion(lesson.code) + '%', 'of ' + L.language));
     wrap.appendChild(stats);
-    const nav = el('div', 'nav-row'); nav.style.maxWidth = '420px'; nav.style.margin = '10px auto 0';
+    const nav = el('div', 'nav-row'); nav.style.maxWidth = '440px'; nav.style.margin = '10px auto 0';
     const again = el('button', 'btn sec', '🔁 Review these');
-    const back = el('button', 'btn primary', 'More topics →');
+    const back2 = el('button', 'btn primary', 'More topics →');
     again.addEventListener('click', () => startReview(lesson.code, lesson.items.map(i => i.id)));
-    back.addEventListener('click', () => go('themes', { code: lesson.code }));
-    nav.appendChild(again); nav.appendChild(back);
-    wrap.appendChild(nav);
+    back2.addEventListener('click', () => go('themes', { code: lesson.code }));
+    nav.appendChild(again); nav.appendChild(back2); wrap.appendChild(nav);
     views.replaceChildren(wrap);
   }
+  function statBox(v, lab) { const s = el('div', 'stat'); s.innerHTML = '<b>' + v + '</b><span>' + lab + '</span>'; return s; }
 
   /* ===================== REVIEW ===================== */
-  const review = { code: null, items: [], idx: 0, correct: 0 };
-  function shuffle(a) { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+  const review = { code: null, items: [], idx: 0, correct: 0, perf: null };
   function startReview(code, ids) {
-    const L = C.languages[code];
-    let pool;
+    const L = C.languages[code]; let pool;
     if (ids && ids.length) pool = L.items.filter(i => ids.indexOf(i.id) >= 0);
     else { const lp = langProg(code); pool = L.items.filter(i => lp.learned[i.id]); }
     if (pool.length < 1) { toast('Nothing to review yet'); return; }
-    // weight weaker items first
-    const lp = langProg(code);
-    pool.sort((a, b) => (lp.strength[a.id] || 0) - (lp.strength[b.id] || 0));
-    review.items = shuffle(pool).slice(0, Math.min(pool.length, 15));
-    review.code = code; review.idx = 0; review.correct = 0;
+    const lp = langProg(code); pool.sort((a, b) => (lp.strength[a.id] || 0) - (lp.strength[b.id] || 0));
+    review.items = shuffle(pool).slice(0, Math.min(pool.length, 15)); review.code = code; review.idx = 0; review.correct = 0; review.perf = {};
     go('review', { code });
   }
-
   function renderReview() {
     const L = C.languages[review.code];
     crumb.textContent = L.language + ' · Review';
     if (review.idx >= review.items.length) return renderReviewDone();
     const item = review.items[review.idx];
     const wrap = el('div');
-
-    const pt = el('div', 'progress-top');
-    const bar = el('div', 'bar'); const fill = el('i');
-    fill.style.width = (review.idx / review.items.length * 100) + '%'; bar.appendChild(fill);
-    pt.appendChild(bar);
-    pt.appendChild(el('div', 'num', (review.idx + 1) + ' / ' + review.items.length));
-    wrap.appendChild(pt);
+    const pt = el('div', 'progress-top'); const bar = el('div', 'bar'); const fill = el('i'); fill.style.width = (review.idx / review.items.length * 100) + '%'; bar.appendChild(fill);
+    pt.appendChild(bar); pt.appendChild(el('div', 'num', (review.idx + 1) + ' / ' + review.items.length)); wrap.appendChild(pt);
 
     const card = el('div', 'card');
     card.appendChild(el('div', 'pic', item.emoji || '🗣️'));
-    card.appendChild(el('div', 'target', '❔'));
-    const prompt = el('div', 'phon', 'Can you say this in ' + L.language + '?');
-    card.appendChild(prompt);
-
+    const tEl = el('div', 'target', '❔'); card.appendChild(tEl);
+    const prompt = el('div', 'phon', 'Can you say this in ' + L.language + '?'); card.appendChild(prompt);
     const row = el('div', 'speak-row');
     const micBtn = el('button', 'btn mic', SR_SUPPORTED ? '🎤 Say it' : '🎤 I said it');
-    const revealBtn = el('button', 'btn play', '👁️ Reveal');
-    row.appendChild(micBtn); row.appendChild(revealBtn);
-    card.appendChild(row);
-
+    const revealBtn = el('button', 'btn play', '👁️ Reveal'); row.appendChild(micBtn); row.appendChild(revealBtn); card.appendChild(row);
     const fb = el('div', 'feedback'); card.appendChild(fb);
-
     const reveal = el('div', 'reveal'); reveal.style.display = 'none';
-    reveal.appendChild(el('div', 'target', item.target));
-    reveal.appendChild(el('div', 'phon', item.phonetic || ''));
-    reveal.appendChild(el('div', 'trans', item.translation));
-    const playBtn = el('button', 'btn play', '🔊 Hear it');
-    playBtn.style.marginTop = '12px';
-    reveal.appendChild(playBtn);
-    card.appendChild(reveal);
+    reveal.appendChild(el('div', 'target', item.target)); reveal.appendChild(el('div', 'phon', item.phonetic || '')); reveal.appendChild(el('div', 'trans', item.translation));
+    const playBtn = el('button', 'btn play', '🔊 Hear it'); playBtn.style.marginTop = '12px'; reveal.appendChild(playBtn); card.appendChild(reveal);
     wrap.appendChild(card);
-
     const nav = el('div', 'nav-row');
-    const hardBtn = el('button', 'btn sec', '😕 Again');
-    const goodBtn = el('button', 'btn primary', '✅ Got it');
-    nav.appendChild(hardBtn); nav.appendChild(goodBtn);
-    wrap.appendChild(nav);
+    const hardBtn = el('button', 'btn sec', '😕 Again'); const goodBtn = el('button', 'btn primary', '✅ Got it');
+    nav.appendChild(hardBtn); nav.appendChild(goodBtn); wrap.appendChild(nav);
     views.replaceChildren(wrap);
 
-    function doReveal() {
-      reveal.style.display = 'block'; revealBtn.style.display = 'none';
-      card.querySelector('.target').textContent = item.target;
-      prompt.style.display = 'none';
-      speak(item.target, L.bcp47);
-    }
+    function doReveal() { reveal.style.display = 'block'; revealBtn.style.display = 'none'; tEl.textContent = item.target; prompt.style.display = 'none'; speak(item.target, L.bcp47); }
     revealBtn.addEventListener('click', doReveal);
     playBtn.addEventListener('click', () => speak(item.target, L.bcp47));
-
     let recording = false;
     micBtn.addEventListener('click', () => {
       if (!SR_SUPPORTED) { doReveal(); return; }
       if (recording) { stopListening(); return; }
       recording = true; micBtn.classList.add('rec'); micBtn.textContent = '● Listening…';
-      listen(L.bcp47, review.code, (res) => {
+      listen(L.bcp47, (res) => {
         recording = false; micBtn.classList.remove('rec'); micBtn.textContent = '🎤 Say it';
         if (res.unsupported || res.error || res.ended || !res.transcript) { doReveal(); return; }
-        const s = Math.max.apply(null, (res.alternatives || [res.transcript]).map(a => similarity(normalize(a, review.code), normalize(item.target, review.code))));
-        card.querySelector('.target').textContent = item.target;
-        prompt.style.display = 'none'; reveal.style.display = 'block'; revealBtn.style.display = 'none';
-        if (s >= 0.8) { fb.className = 'feedback show good'; fb.innerHTML = '🎉 Perfect — “' + res.transcript + '”'; }
+        const s = scoreSpeech(res.alternatives || [res.transcript], item.target, review.code);
+        tEl.textContent = item.target; prompt.style.display = 'none'; reveal.style.display = 'block'; revealBtn.style.display = 'none';
+        if (s >= 0.8) { fb.className = 'feedback show good'; fb.innerHTML = '🎉 Perfect — “' + res.transcript + '”'; if (!review.perf[item.id]) { review.perf[item.id] = 1; award(5, 'perfect'); } }
         else { fb.className = 'feedback show mid'; fb.innerHTML = '👂 Heard: “' + res.transcript + '”. Compare below.'; speak(item.target, L.bcp47); }
       });
     });
-
     hardBtn.addEventListener('click', () => { bumpStrength(review.code, item.id, -1); review.idx++; renderReview(); });
-    goodBtn.addEventListener('click', () => { bumpStrength(review.code, item.id, 1); review.correct++; review.idx++; renderReview(); });
+    goodBtn.addEventListener('click', () => { bumpStrength(review.code, item.id, 1); review.correct++; award(3, 'review'); review.idx++; renderReview(); });
   }
-
   function renderReviewDone() {
-    const L = C.languages[review.code];
     const wrap = el('div', 'done');
     wrap.appendChild(el('div', 'big', '🌟'));
     wrap.appendChild(el('h2', null, 'Review done!'));
     wrap.appendChild(el('p', null, 'You recalled ' + review.correct + ' of ' + review.items.length + ' — great practice. Little and often is how speaking sticks.'));
-    const nav = el('div', 'nav-row'); nav.style.maxWidth = '420px'; nav.style.margin = '10px auto 0';
-    const again = el('button', 'btn sec', '🔁 Again');
-    const back = el('button', 'btn primary', 'Back to topics →');
-    again.addEventListener('click', () => startReview(review.code));
-    back.addEventListener('click', () => go('themes', { code: review.code }));
-    nav.appendChild(again); nav.appendChild(back);
-    wrap.appendChild(nav);
+    const nav = el('div', 'nav-row'); nav.style.maxWidth = '440px'; nav.style.margin = '10px auto 0';
+    const again = el('button', 'btn sec', '🔁 Again'); const back2 = el('button', 'btn primary', 'Back to topics →');
+    again.addEventListener('click', () => startReview(review.code)); back2.addEventListener('click', () => go('themes', { code: review.code }));
+    nav.appendChild(again); nav.appendChild(back2); wrap.appendChild(nav);
+    views.replaceChildren(wrap);
+  }
+
+  /* ===================== STATS ===================== */
+  function renderStats() {
+    crumb.textContent = 'Your progress';
+    const s = gatherStats(); const li = G.levelInfo();
+    const wrap = el('div');
+
+    const hero = el('div', 'stat-hero');
+    const ring = el('div', 'big-ring'); ring.style.setProperty('--p', li.pct);
+    const inner = el('div', 'inner'); inner.innerHTML = '<b>' + li.level + '</b><span>LEVEL</span>'; ring.appendChild(inner); hero.appendChild(ring);
+    hero.appendChild(el('div', 'rankname', li.rankEmoji + ' ' + li.rank));
+    hero.appendChild(el('div', 'xpline', li.xp + ' XP · ' + (li.need - li.into) + ' to level ' + (li.level + 1)));
+    wrap.appendChild(hero);
+
+    // daily goal
+    const goalP = el('div', 'panel');
+    goalP.appendChild(el('h3', null, '🎯 Daily goal'));
+    goalP.appendChild(el('p', 'psub', 'Hit your goal each day to keep your streak alive.'));
+    const seg = el('div', 'goal-seg');
+    [{ g: 20, n: 'Casual' }, { g: 30, n: 'Regular' }, { g: 50, n: 'Serious' }].forEach(o => {
+      const b = el('button', null, o.g + ' XP<b>' + o.n + '</b>');
+      b.setAttribute('aria-pressed', G.data.dailyGoal === o.g ? 'true' : 'false');
+      b.addEventListener('click', () => { G.setGoal(o.g); renderStats(); });
+      seg.appendChild(b);
+    });
+    goalP.appendChild(seg);
+    wrap.appendChild(goalP);
+
+    // streak + heatmap
+    const heatP = el('div', 'panel');
+    heatP.appendChild(el('h3', null, '🔥 ' + s.streak + '-day streak · best ' + G.data.longestStreak));
+    heatP.appendChild(el('p', 'psub', 'Last 5 weeks — brighter means more practice.'));
+    const heat = el('div', 'heat');
+    G.heatmap(35).forEach(c => { const cell = el('div', 'cell' + (c.level ? ' l' + c.level : '')); cell.title = c.date + ' · ' + c.xp + ' XP'; heat.appendChild(cell); });
+    heatP.appendChild(heat);
+    const legend = el('div', 'heat-legend'); legend.innerHTML = 'less <span class="cell"></span><span class="cell l1"></span><span class="cell l2"></span><span class="cell l3"></span><span class="cell l4"></span> more';
+    heatP.appendChild(legend);
+    wrap.appendChild(heatP);
+
+    // mastery per language
+    const mP = el('div', 'panel');
+    mP.appendChild(el('h3', null, '📚 Language mastery'));
+    const mastery = el('div', 'mastery');
+    Object.keys(C.languages).forEach(code => {
+      const L = C.languages[code]; const n = wordsLearned(code); const pct = Math.round(n / L.items.length * 100);
+      const row = el('div', 'mrow');
+      row.appendChild(el('div', 'mflag', L.flag || '🌐'));
+      const mid = el('div', 'mmid');
+      const name = el('div', 'mname'); name.innerHTML = L.language + '<span>' + n + '/' + L.items.length + ' · ' + pct + '%</span>'; mid.appendChild(name);
+      const bar = el('div', 'mbar'); const fill = el('i'); fill.style.width = pct + '%'; bar.appendChild(fill); mid.appendChild(bar);
+      row.appendChild(mid);
+      row.style.cursor = 'pointer'; row.addEventListener('click', () => go('themes', { code }));
+      mastery.appendChild(row);
+    });
+    mP.appendChild(mastery);
+    wrap.appendChild(mP);
+
+    // KPIs
+    const kP = el('div', 'panel');
+    kP.appendChild(el('h3', null, '⭐ Totals'));
+    const kpis = el('div', 'kpis');
+    kpis.appendChild(kpi(s.wordsTotal, 'words learned'));
+    kpis.appendChild(kpi(s.perfect, 'great pronunciations'));
+    kpis.appendChild(kpi(s.dialoguesTotal, 'conversations'));
+    kpis.appendChild(kpi(G.daysPracticed(), 'days practiced'));
+    kP.appendChild(kpis);
+    wrap.appendChild(kP);
+
+    const ab = el('button', 'review-cta', '🏅 View achievements (' + badgeSummary() + ')');
+    ab.addEventListener('click', () => go('achievements'));
+    wrap.appendChild(ab);
+
+    views.replaceChildren(wrap);
+  }
+  function kpi(v, lab) { const k = el('div', 'kpi'); k.innerHTML = '<b>' + v + '</b><span>' + lab + '</span>'; return k; }
+
+  /* ===================== ACHIEVEMENTS ===================== */
+  function renderAchievements() {
+    crumb.textContent = 'Achievements';
+    const list = G.achievementsFor(gatherStats());
+    const on = list.filter(a => a.unlocked).length;
+    const wrap = el('div');
+    const head = el('div', 'lang-head');
+    head.appendChild(el('div', 'flag', '🏅'));
+    const ht = el('div'); ht.appendChild(el('div', 't', 'Achievements')); ht.appendChild(el('div', 's', on + ' of ' + list.length + ' unlocked')); head.appendChild(ht);
+    wrap.appendChild(head);
+    const grid = el('div', 'ach-grid');
+    list.forEach(a => {
+      const c = el('div', 'ach' + (a.unlocked ? ' on' : ''));
+      c.appendChild(el('div', 'badge', a.emoji));
+      c.appendChild(el('div', 'at', a.title));
+      c.appendChild(el('div', 'ad', a.desc));
+      if (a.unlocked) c.appendChild(el('div', 'adate', '✓ ' + a.unlockedDate));
+      else if (a.prog) { const pb = el('div', 'apbar'); const f = el('i'); f.style.width = Math.round(a.prog.cur / a.prog.max * 100) + '%'; pb.appendChild(f); c.appendChild(pb); c.appendChild(el('div', 'ad', a.prog.cur + ' / ' + a.prog.max)); }
+      grid.appendChild(c);
+    });
+    wrap.appendChild(grid);
+    views.replaceChildren(wrap);
+  }
+
+  /* ===================== CONVERSATIONS ===================== */
+  function renderDialogues() {
+    const L = C.languages[state.code];
+    crumb.textContent = L.language + ' · Conversations';
+    const wrap = el('div');
+    const head = el('div', 'lang-head');
+    head.appendChild(el('div', 'flag', '💬'));
+    const ht = el('div'); ht.appendChild(el('div', 't', 'Conversations')); ht.appendChild(el('div', 's', 'Role-play a real ' + L.language + ' exchange — you speak your lines.')); head.appendChild(ht);
+    wrap.appendChild(head);
+    const grid = el('div', 'theme-grid');
+    (DLG[state.code] || []).forEach(sc => {
+      const done = (G.data.dialogues[state.code] || {})[sc.id];
+      const card = el('button', 'theme-card');
+      card.appendChild(el('div', 'ic', sc.icon));
+      card.appendChild(el('div', 'tt', sc.title));
+      card.appendChild(el('div', 'cnt', sc.setting));
+      const meta = el('div', 'meta'); meta.style.marginTop = '10px';
+      meta.appendChild(el('div', 'cnt', (done ? '✅ Completed' : '▶ ' + sc.lines.filter(l => l.speaker === 'you').length + ' lines to say')));
+      card.appendChild(meta);
+      card.addEventListener('click', () => startDialogue(state.code, sc.id));
+      grid.appendChild(card);
+    });
+    wrap.appendChild(grid);
+    views.replaceChildren(wrap);
+  }
+
+  const dlg = { code: null, scenario: null, idx: 0, perf: null, awarded: false };
+  function startDialogue(code, id) {
+    const sc = (DLG[code] || []).find(s => s.id === id); if (!sc) return;
+    dlg.code = code; dlg.scenario = sc; dlg.idx = 0; dlg.perf = {}; dlg.awarded = false;
+    go('dialogue', { code, scenarioId: id });
+  }
+  function renderDialogue() {
+    const L = C.languages[dlg.code]; const sc = dlg.scenario;
+    crumb.textContent = L.language + ' · ' + sc.title;
+    if (dlg.idx >= sc.lines.length) return renderDialogueDone();
+    const wrap = el('div');
+
+    const head = el('div', 'scene-head');
+    head.appendChild(el('div', 'si', sc.icon));
+    const ht = el('div'); ht.appendChild(el('div', 'st', sc.title)); ht.appendChild(el('div', 'ss', sc.setting)); head.appendChild(ht);
+    wrap.appendChild(head);
+
+    const chat = el('div', 'chat');
+    for (let i = 0; i < dlg.idx; i++) chat.appendChild(bubble(sc.lines[i], L, false));
+    const cur = sc.lines[dlg.idx];
+    if (cur.speaker === 'them') {
+      chat.appendChild(bubble(cur, L, true));
+      wrap.appendChild(chat);
+      const cta = el('div', 'turn-cta'); const b = el('button', 'btn primary', 'Continue ▸');
+      b.addEventListener('click', () => { stopAll(); dlg.idx++; renderDialogue(); }); cta.appendChild(b); wrap.appendChild(cta);
+      views.replaceChildren(wrap);
+      setTimeout(() => speak(cur.target, L.bcp47), 260);
+    } else {
+      wrap.appendChild(chat);
+      const yt = el('div', 'yourturn');
+      yt.appendChild(el('div', 'yt-lab', '🎤 Your line'));
+      yt.appendChild(el('div', 'yt-en', '“' + cur.translation + '”'));
+      yt.appendChild(el('div', 'yt-target', cur.target));
+      yt.appendChild(el('div', 'yt-ph', cur.phonetic || ''));
+      const fb = el('div', 'feedback'); yt.appendChild(fb);
+      const actions = el('div', 'yt-actions');
+      const hearBtn = el('button', 'btn play', '🔊 Hear it');
+      const micBtn = el('button', 'btn mic', SR_SUPPORTED ? '🎤 Say it' : '🎤 Practice');
+      actions.appendChild(hearBtn); actions.appendChild(micBtn); yt.appendChild(actions);
+      wrap.appendChild(yt);
+      const cta = el('div', 'turn-cta'); const nextB = el('button', 'btn primary', 'Say & continue ▸'); cta.appendChild(nextB); wrap.appendChild(cta);
+      views.replaceChildren(wrap);
+      setTimeout(() => speak(cur.target, L.bcp47), 200);
+
+      hearBtn.addEventListener('click', () => speak(cur.target, L.bcp47));
+      let recording = false;
+      micBtn.addEventListener('click', () => {
+        if (!SR_SUPPORTED) { showFeedback(fb, 'mid', '👍 Practiced! Tap 🔊 to compare, then continue.'); return; }
+        if (recording) { stopListening(); return; }
+        recording = true; micBtn.classList.add('rec'); micBtn.textContent = '● Listening…';
+        listen(L.bcp47, (res) => {
+          recording = false; micBtn.classList.remove('rec'); micBtn.textContent = '🎤 Say it';
+          if (res.unsupported || res.error || res.ended || !res.transcript) return showFeedback(fb, 'mid', 'Didn\'t catch that — try again 🔊');
+          const best = scoreSpeech(res.alternatives || [res.transcript], cur.target, dlg.code);
+          if (best >= 0.75) { if (!dlg.perf[dlg.idx]) { dlg.perf[dlg.idx] = 1; award(5, 'perfect'); } showFeedback(fb, 'good', '🎉 Nice! Ready to continue.', 'Heard: “' + res.transcript + '”'); }
+          else if (best >= 0.45) showFeedback(fb, 'mid', '👏 Close — hear it once more.', 'Heard: “' + res.transcript + '”');
+          else showFeedback(fb, 'bad', '🔁 Try again after the audio.', 'Heard: “' + res.transcript + '”');
+        });
+      });
+      nextB.addEventListener('click', () => { stopAll(); award(3, 'dialogue'); dlg.idx++; renderDialogue(); });
+    }
+  }
+  function bubble(line, L, active) {
+    const b = el('div', 'bubble ' + (line.speaker === 'you' ? 'you' : 'them'));
+    b.appendChild(el('div', 'bemoji', line.emoji || (line.speaker === 'you' ? '🗣️' : '💬')));
+    b.appendChild(el('div', 'btxt', line.target));
+    if (line.phonetic) b.appendChild(el('div', 'bph', line.phonetic));
+    b.appendChild(el('div', 'btr', line.translation));
+    const mic = el('div', 'bmic'); const play = el('button', 'chip', '🔊'); play.addEventListener('click', () => speak(line.target, L.bcp47)); mic.appendChild(play); b.appendChild(mic);
+    return b;
+  }
+  function renderDialogueDone() {
+    const L = C.languages[dlg.code]; const sc = dlg.scenario;
+    if (!dlg.awarded) { dlg.awarded = true; G.markDialogue(dlg.code, sc.id); award(15, 'dialogue'); }
+    crumb.textContent = L.language + ' · complete';
+    const wrap = el('div', 'done');
+    wrap.appendChild(el('div', 'big', '🎭'));
+    wrap.appendChild(el('h2', null, 'Conversation complete!'));
+    wrap.appendChild(el('p', null, 'You held your own through “' + sc.title + '” in ' + L.language + '. That\'s real speaking practice.'));
+    const nav = el('div', 'nav-row'); nav.style.maxWidth = '440px'; nav.style.margin = '10px auto 0';
+    const again = el('button', 'btn sec', '🔁 Replay');
+    const more = el('button', 'btn primary', 'More conversations →');
+    again.addEventListener('click', () => startDialogue(dlg.code, sc.id));
+    more.addEventListener('click', () => go('dialogues', { code: dlg.code }));
+    nav.appendChild(again); nav.appendChild(more); wrap.appendChild(nav);
+    views.replaceChildren(wrap);
+  }
+
+  /* ===================== CHALLENGE (quiz) ===================== */
+  const quiz = { code: null, qs: [], idx: 0, correct: 0, answered: false };
+  function startQuiz(code) {
+    const L = C.languages[code]; const lp = langProg(code);
+    let pool = L.items.filter(i => lp.learned[i.id]);
+    if (pool.length < 4) pool = L.items.slice();
+    const chosen = shuffle(pool).slice(0, Math.min(10, pool.length));
+    const qs = chosen.map((item, i) => {
+      let type = ['listen', 'meaning', 'speak'][i % 3];
+      if (type === 'speak' && !SR_SUPPORTED) type = 'meaning';
+      const others = shuffle(L.items.filter(x => x.id !== item.id)).slice(0, 3);
+      const opts = shuffle([item].concat(others));
+      return { type, item, opts };
+    });
+    quiz.code = code; quiz.qs = qs; quiz.idx = 0; quiz.correct = 0; quiz.answered = false;
+    go('quiz', { code });
+  }
+  function renderQuiz() {
+    const L = C.languages[quiz.code];
+    crumb.textContent = L.language + ' · Challenge';
+    if (quiz.idx >= quiz.qs.length) return renderQuizDone();
+    const q = quiz.qs[quiz.idx]; const item = q.item;
+    const wrap = el('div');
+
+    const pt = el('div', 'progress-top'); const bar = el('div', 'bar'); const fill = el('i'); fill.style.width = (quiz.idx / quiz.qs.length * 100) + '%'; bar.appendChild(fill);
+    pt.appendChild(bar); pt.appendChild(el('div', 'num', (quiz.idx + 1) + ' / ' + quiz.qs.length)); wrap.appendChild(pt);
+
+    const dots = el('div', 'qscore'); quiz.qs.forEach((x, i) => { const d = el('div', 'qdot' + (x._res === true ? ' ok' : x._res === false ? ' no' : '')); dots.appendChild(d); }); wrap.appendChild(dots);
+
+    quiz.answered = false;
+    const card = el('div', 'card');
+
+    if (q.type === 'listen') {
+      card.appendChild(el('div', 'quiz-q', '🔊 What did you hear?'));
+      const rep = el('button', 'btn play', '🔊 Play again'); rep.style.margin = '0 auto 6px'; rep.addEventListener('click', () => speak(item.target, L.bcp47)); card.appendChild(rep);
+      card.appendChild(el('div', 'quiz-sub', 'Tap the word you heard.'));
+      card.appendChild(optionGrid(q, 'listen', L));
+      wrap.appendChild(card); views.replaceChildren(wrap);
+      setTimeout(() => speak(item.target, L.bcp47), 300);
+    } else if (q.type === 'meaning') {
+      card.appendChild(el('div', 'quiz-emoji', item.emoji || '❓'));
+      card.appendChild(el('div', 'quiz-q', item.target));
+      card.appendChild(el('div', 'quiz-sub', 'What does it mean?'));
+      card.appendChild(optionGrid(q, 'meaning', L));
+      wrap.appendChild(card); views.replaceChildren(wrap);
+    } else { // speak
+      card.appendChild(el('div', 'quiz-emoji', item.emoji || '🗣️'));
+      card.appendChild(el('div', 'quiz-q', 'Say: “' + item.translation + '”'));
+      card.appendChild(el('div', 'quiz-sub', 'Speak it in ' + L.language + '.'));
+      const fb = el('div', 'feedback'); card.appendChild(fb);
+      const row = el('div', 'speak-row');
+      const micBtn = el('button', 'btn mic', '🎤 Say it'); const skip = el('button', 'btn ghost', 'Reveal');
+      row.appendChild(micBtn); row.appendChild(skip); card.appendChild(row);
+      wrap.appendChild(card); views.replaceChildren(wrap);
+      let recording = false, done = false;
+      function settle(ok, heard) {
+        if (done) return; done = true;
+        q._res = ok; if (ok) { quiz.correct++; award(5, 'quiz'); }
+        fb.className = 'feedback show ' + (ok ? 'good' : 'bad');
+        fb.innerHTML = (ok ? '🎉 Correct! ' : '❌ The answer: ') + '<b>' + item.target + '</b>' + (heard ? '<span class="heard">Heard: “' + heard + '”</span>' : '');
+        speak(item.target, L.bcp47);
+        const nx = el('div', 'nav-row'); const nb = el('button', 'btn primary', quiz.idx === quiz.qs.length - 1 ? 'Finish ✓' : 'Next →'); nb.addEventListener('click', () => { quiz.idx++; renderQuiz(); }); nx.appendChild(nb); card.appendChild(nx);
+      }
+      micBtn.addEventListener('click', () => {
+        if (recording) { stopListening(); return; }
+        recording = true; micBtn.classList.add('rec'); micBtn.textContent = '● Listening…';
+        listen(L.bcp47, (res) => {
+          recording = false; micBtn.classList.remove('rec'); micBtn.textContent = '🎤 Say it';
+          if (res.unsupported || res.error || res.ended || !res.transcript) { settle(false, res.transcript || ''); return; }
+          const best = scoreSpeech(res.alternatives || [res.transcript], item.target, quiz.code);
+          settle(best >= 0.6, res.transcript);
+        });
+      });
+      skip.addEventListener('click', () => settle(false, ''));
+    }
+  }
+  function optionGrid(q, mode, L) {
+    const grid = el('div', 'q-options');
+    let done = false;
+    q.opts.forEach(opt => {
+      const b = el('button', 'q-opt');
+      if (mode === 'listen') b.innerHTML = '<span class="oe">' + (opt.emoji || '') + '</span>' + opt.translation;
+      else b.textContent = opt.translation;
+      b.addEventListener('click', () => {
+        if (done) return; done = true;
+        const ok = opt.id === q.item.id;
+        q._res = ok; if (ok) { quiz.correct++; award(5, 'quiz'); }
+        Array.from(grid.children).forEach(ch => { ch.disabled = true; });
+        b.classList.add(ok ? 'correct' : 'wrong');
+        if (!ok) { Array.from(grid.children).forEach((ch, i) => { if (q.opts[i].id === q.item.id) ch.classList.add('correct'); }); }
+        speak(q.item.target, L.bcp47);
+        const nx = el('div', 'nav-row'); nx.style.marginTop = '16px';
+        const nb = el('button', 'btn primary', quiz.idx === quiz.qs.length - 1 ? 'Finish ✓' : 'Next →');
+        nb.addEventListener('click', () => { quiz.idx++; renderQuiz(); }); nx.appendChild(nb);
+        grid.parentElement.appendChild(nx);
+      });
+      grid.appendChild(b);
+    });
+    return grid;
+  }
+  function renderQuizDone() {
+    const L = C.languages[quiz.code]; const total = quiz.qs.length; const pct = Math.round(quiz.correct / total * 100);
+    if (!quiz._awarded) { quiz._awarded = true; const bonus = 5 + Math.round(pct / 10); award(bonus, 'quiz'); }
+    crumb.textContent = L.language + ' · Challenge';
+    const wrap = el('div', 'done');
+    wrap.appendChild(el('div', 'big', pct >= 80 ? '🏆' : pct >= 50 ? '💪' : '🌱'));
+    wrap.appendChild(el('h2', null, quiz.correct + ' / ' + total + ' correct'));
+    wrap.appendChild(el('p', null, pct >= 80 ? 'Outstanding — you\'ve really got these!' : pct >= 50 ? 'Solid work. A quick review will push you higher.' : 'Good effort — practice the lessons and try again.'));
+    const stats = el('div', 'stat-row'); stats.appendChild(statBox(pct + '%', 'accuracy')); stats.appendChild(statBox(quiz.correct, 'correct')); wrap.appendChild(stats);
+    const nav = el('div', 'nav-row'); nav.style.maxWidth = '440px'; nav.style.margin = '10px auto 0';
+    const again = el('button', 'btn sec', '🔁 New challenge'); const back2 = el('button', 'btn primary', 'Back to topics →');
+    again.addEventListener('click', () => { quiz._awarded = false; startQuiz(quiz.code); }); back2.addEventListener('click', () => go('themes', { code: quiz.code }));
+    nav.appendChild(again); nav.appendChild(back2); wrap.appendChild(nav);
     views.replaceChildren(wrap);
   }
 
   /* ---------- boot ---------- */
+  document.addEventListener('pal:caninstall', () => { if (state.view === 'home') renderHome(); });
   initTheme();
-  go('home');
+  render();
 })();
