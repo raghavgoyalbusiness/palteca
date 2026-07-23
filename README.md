@@ -27,11 +27,16 @@ Every word travels through seven quick steps so it sticks in your mouth, not jus
 
 ## Features
 
-- 🖼️ **Visual-first cards** — an emoji anchor for every word and phrase.
+- 🖼️ **Visual-first lessons** — an emoji anchor for every word and phrase, run through the 7-step PALTECA loop.
 - 🔊 **Native pronunciation** — text-to-speech in `es-ES` / `fr-FR` / `zh-CN`, with a 🐢 slow mode for tricky sounds.
 - 🎤 **Speak & get scored** — your microphone is transcribed and compared to the target so you get instant feedback on your pronunciation _(live scoring works best in Chrome; a self-check fallback is used elsewhere — your voice never leaves the check)_.
+- 💬 **Conversation mode** — role-play real, native-verified exchanges (café, hotel check-in, meeting someone, asking directions) where **you speak your lines** and the app plays the other side.
+- 🎯 **Challenge mode** — a 10-question mixed quiz: listen-and-pick, meaning match, and speak-it-aloud, scored with instant feedback.
 - 🔁 **Review mode** — lightweight spaced repetition that surfaces your weakest words first.
-- 📈 **Progress tracking** — saved locally per language.
+- 🔥 **Streaks, XP & levels** — daily goals, a level/rank system, and a day-streak to keep you coming back.
+- 🏅 **Achievements** — 17 unlockable badges for streaks, vocabulary, pronunciation, and conversations.
+- 📊 **Progress dashboard** — level ring, a 5-week practice heatmap, per-language mastery, and lifetime totals.
+- 📲 **Installable PWA** — add it to your home screen and use it fully **offline**.
 - 🌗 **Light & dark themes.**
 
 ## Content
@@ -54,12 +59,17 @@ Set a custom port with `PORT=8080 node server.js`.
 
 ```
 palteca/
-├── server.js            # zero-dependency static server
+├── server.js               # zero-dependency static server
 └── public/
     ├── index.html
     ├── styles.css
-    ├── app.js           # SPA: routing, speech synthesis + recognition, PALTECA loop
-    └── content.js       # lesson data (58 items × 3 languages)
+    ├── store.js            # gamification: XP, levels, streaks, achievements
+    ├── app.js              # SPA: routing, speech synth + recognition, all modes
+    ├── content.js          # lesson data (58 items × 3 languages)
+    ├── dialogues.js        # conversation scripts (4 role-plays × 3 languages)
+    ├── manifest.webmanifest
+    ├── sw.js               # service worker (offline app shell)
+    └── icon.svg
 ```
 
 ## Tech
