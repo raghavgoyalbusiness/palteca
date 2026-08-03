@@ -358,3 +358,66 @@ button:focus-visible{outline:3px solid var(--brand-2);outline-offset:2px}
 
 /* achievement toast */
 .toast.ach{background:linear-gradient(135deg,#f2a541,#e07d2a);color:#fff}
+
+/* ============================================================
+   MORSE & SIGN tracks
+   ============================================================ */
+:root{ --hand:#e9c79c; --hand-stroke:#b98c56; }
+:root[data-theme="dark"]{ --hand:#caa877; --hand-stroke:#8a6a42; }
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){ --hand:#caa877; --hand-stroke:#8a6a42; } }
+
+/* Morse: big character + pattern */
+.morse-char{font-size:64px;font-weight:900;letter-spacing:1px;margin:4px 0 2px}
+.morse-pattern{display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;margin:6px 0}
+.morse-pattern .dot,.morse-pattern .dash{background:var(--brand);border-radius:99px;display:inline-block}
+.morse-pattern .dot{width:16px;height:16px}
+.morse-pattern .dash{width:44px;height:16px}
+.morse-pattern.big{gap:12px;margin:10px 0 6px}
+.morse-pattern.big .dot{width:20px;height:20px}
+.morse-pattern.big .dash{width:56px;height:20px}
+
+/* Morse tap trainer */
+.tap-label{font-weight:800;font-size:12px;letter-spacing:.6px;text-transform:uppercase;color:var(--ink-soft);margin:16px 0 8px}
+.tap-out{min-height:38px;display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;
+  background:var(--card2);border:1px solid var(--line);border-radius:14px;padding:10px}
+.tap-out .dot{width:14px;height:14px;border-radius:99px;background:var(--brand)}
+.tap-out .dash{width:38px;height:14px;border-radius:99px;background:var(--brand)}
+.tap-out .tap-ph{color:var(--ink-soft);font-size:13px;font-weight:600}
+.tap-btns{display:flex;gap:10px;justify-content:center;margin-top:10px}
+.btn.tapbtn{background:var(--card2);border:1px solid var(--line);color:var(--ink);font-size:17px;min-width:88px;justify-content:center}
+.btn.tapbtn:active{background:var(--brand);color:#fff}
+
+/* Translator */
+.trans-input{width:100%;border:1px solid var(--line);background:var(--card2);color:var(--ink);border-radius:14px;
+  padding:14px;font-size:18px;font-weight:700;font-family:inherit;resize:vertical;min-height:56px;letter-spacing:.5px}
+.trans-input:focus{outline:none;border-color:var(--brand)}
+.trans-out{margin-top:14px;background:var(--card2);border:1px solid var(--line);border-radius:14px;padding:16px;
+  font-size:22px;color:var(--brand);font-weight:800;letter-spacing:2px;word-break:break-word;min-height:40px;line-height:1.5}
+.trans-ctrl{display:flex;gap:10px;margin-top:12px}
+.trans-ctrl .btn{flex:1;justify-content:center}
+.abbr{display:flex;flex-direction:column;gap:8px}
+.abbr-row{display:flex;align-items:center;gap:8px;font-size:14px;flex-wrap:wrap}
+.abbr-row b{color:var(--ink);min-width:34px}
+.abbr-row i{color:var(--brand);font-style:normal;font-weight:700;letter-spacing:1px}
+.abbr-row span{color:var(--ink-soft)}
+
+/* Sign hand diagram */
+.hand{display:flex;justify-content:center}
+.hand.big .hand-svg{width:150px;height:180px}
+.hand.mini .hand-svg{width:62px;height:74px}
+.hand-svg{width:120px;height:150px}
+.hand-svg .hf{fill:var(--hand);stroke:var(--hand-stroke);stroke-width:2;stroke-linejoin:round}
+.hand-svg .ho{fill:none;stroke:var(--hand);stroke-width:22;stroke-linecap:round}
+.hand-svg .hc{fill:none;stroke:var(--hand);stroke-width:22;stroke-linecap:round}
+.hand-svg .hl{fill:none;stroke:var(--hand-stroke);stroke-width:3}
+.hand-svg .hx{stroke:var(--hand-stroke);stroke-width:4;stroke-linecap:round}
+.sign-desc{color:var(--ink-soft);font-size:15px;line-height:1.5;max-width:34ch;margin:8px auto 0}
+.motion-badge{display:inline-block;background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent);
+  border:1px solid color-mix(in srgb,var(--accent) 40%,transparent);border-radius:99px;padding:4px 12px;font-weight:800;font-size:12px;margin:4px 0}
+
+/* Fingerspell output */
+.spell-out{display:flex;flex-wrap:wrap;gap:12px;margin-top:16px;justify-content:center}
+.spell-cell{background:var(--card2);border:1px solid var(--line);border-radius:14px;padding:8px 8px 4px;text-align:center;transition:transform .15s, box-shadow .15s}
+.spell-cell.on{transform:translateY(-4px) scale(1.06);box-shadow:0 10px 24px rgba(63,125,67,.28);border-color:var(--brand)}
+.spell-l{font-weight:900;font-size:16px;margin-top:2px}
+.spell-gap{width:100%;height:0}
