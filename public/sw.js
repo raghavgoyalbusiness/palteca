@@ -1,8 +1,8 @@
 /* Palteca service worker — offline app shell. */
-const CACHE = 'palteca-v3';
+const CACHE = 'palteca-v4';
 const ASSETS = [
   '/', '/index.html', '/styles.css',
-  '/store.js', '/content.js', '/dialogues.js', '/app.js',
+  '/store.js', '/content.js', '/dialogues.js', '/morse.js', '/sign.js', '/app.js',
   '/icon.svg', '/manifest.webmanifest',
 ];
 

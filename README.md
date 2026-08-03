@@ -32,6 +32,8 @@ Every word travels through seven quick steps so it sticks in your mouth, not jus
 - 🎤 **Speak & get scored** — your microphone is transcribed and compared to the target so you get instant feedback on your pronunciation _(live scoring works best in Chrome; a self-check fallback is used elsewhere — your voice never leaves the check)_.
 - 💬 **Conversation mode** — role-play real, native-verified exchanges (café, hotel check-in, meeting someone, asking directions) where **you speak your lines** and the app plays the other side.
 - 🎯 **Challenge mode** — a 10-question mixed quiz: listen-and-pick, meaning match, and speak-it-aloud, scored with instant feedback.
+- 📡 **Morse code** — learn every letter, number, and prosign with **authentic dot-dash audio** (Web Audio), a tap-it-back trainer, a listen-and-decode quiz, and a live text ↔ Morse translator.
+- 🤟 **ASL fingerspelling** — the American manual alphabet and numbers, each with a hand diagram and an accurate handshape description, a recognition quiz, and a "fingerspell any word" tool.
 - 🔁 **Review mode** — lightweight spaced repetition that surfaces your weakest words first.
 - 🔥 **Streaks, XP & levels** — daily goals, a level/rank system, and a day-streak to keep you coming back.
 - 🏅 **Achievements** — 17 unlockable badges for streaks, vocabulary, pronunciation, and conversations.
@@ -67,6 +69,8 @@ palteca/
     ├── app.js              # SPA: routing, speech synth + recognition, all modes
     ├── content.js          # lesson data (58 items × 3 languages)
     ├── dialogues.js        # conversation scripts (4 role-plays × 3 languages)
+    ├── morse.js            # International Morse Code table
+    ├── sign.js             # ASL fingerspelling (alphabet + numbers)
     ├── manifest.webmanifest
     ├── sw.js               # service worker (offline app shell)
     └── icon.svg

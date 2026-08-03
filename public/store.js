@@ -100,6 +100,11 @@
     { id: 'theme_master', emoji: '🧩', title: 'Topic Master', desc: 'Complete a full topic', test: s => s.themesCompleted >= 1 },
     { id: 'lang_complete', emoji: '🎓', title: 'Fluent Foundations', desc: 'Learn every word in a language', test: s => s.languagesComplete >= 1 },
     { id: 'all_languages', emoji: '👑', title: 'Triple Threat', desc: 'Complete all three languages', test: s => s.languagesComplete >= 3, prog: s => ({ cur: s.languagesComplete, max: 3 }) },
+    { id: 'morse_novice', emoji: '📻', title: 'Dit-Dah', desc: 'Learn 10 Morse characters', test: s => (s.morseLearned || 0) >= 10, prog: s => ({ cur: Math.min(s.morseLearned || 0, 10), max: 10 }) },
+    { id: 'morse_master', emoji: '📡', title: 'Morse Coder', desc: 'Learn the full Morse alphabet', test: s => s.morseLettersTotal > 0 && s.morseLettersLearned >= s.morseLettersTotal, prog: s => ({ cur: s.morseLettersLearned || 0, max: s.morseLettersTotal || 26 }) },
+    { id: 'sos', emoji: '🆘', title: 'Mayday', desc: 'Learn the SOS distress signal', test: s => !!s.sosLearned },
+    { id: 'sign_novice', emoji: '👋', title: 'Handshapes', desc: 'Learn 10 ASL letters', test: s => (s.signLearned || 0) >= 10, prog: s => ({ cur: Math.min(s.signLearned || 0, 10), max: 10 }) },
+    { id: 'sign_master', emoji: '🤟', title: 'Fingerspeller', desc: 'Learn the full ASL alphabet', test: s => s.signLettersTotal > 0 && s.signLettersLearned >= s.signLettersTotal, prog: s => ({ cur: s.signLettersLearned || 0, max: s.signLettersTotal || 26 }) },
   ];
 
   function evaluate(stats) {

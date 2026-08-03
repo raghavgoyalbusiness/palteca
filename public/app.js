@@ -3,6 +3,8 @@
   'use strict';
   const C = window.PALTECA_CONTENT;
   const DLG = window.PALTECA_DIALOGUES || {};
+  const MORSE = window.PALTECA_MORSE || { groups: [], items: [] };
+  const SIGN = window.PALTECA_SIGN || { groups: [], items: [] };
   const G = window.PalStore;
   const $ = (s, r) => (r || document).querySelector(s);
   const el = (t, cls, html) => { const n = document.createElement(t); if (cls) n.className = cls; if (html != null) n.innerHTML = html; return n; };
@@ -60,10 +62,20 @@
     }
     let dTotal = 0, dMax = 0;
     codes.forEach(code => { const done = (G.data.dialogues[code] || {}); const n = Object.keys(done).length; dTotal += n; if (n > dMax) dMax = n; });
+    // Morse & Sign tracks (separate progress under codes 'morse' / 'sign')
+    const mLearn = langProg('morse').learned, sLearn = langProg('sign').learned;
+    const morseLettersTotal = MORSE.items.filter(i => i.group === 'letters').length;
+    const signLettersTotal = SIGN.items.filter(i => i.group === 'alphabet').length;
+    const morseLettersLearned = MORSE.items.filter(i => i.group === 'letters' && mLearn[i.id]).length;
+    const signLettersLearned = SIGN.items.filter(i => i.group === 'alphabet' && sLearn[i.id]).length;
+    const morseLearned = Object.keys(mLearn).filter(id => mLearn[id]).length;
+    const signLearned = Object.keys(sLearn).filter(id => sLearn[id]).length;
     return {
       xp: G.data.xp, streak: G.streak(), perfect: G.data.perfectCount,
       wordsTotal, wordsMaxPerLang: wordsMax, languagesComplete: langComplete,
       themesCompleted, polyglotCount, dialoguesTotal: dTotal, dialoguesMaxPerLang: dMax,
+      morseLearned, morseLettersLearned, morseLettersTotal, sosLearned: !!mLearn['sos'],
+      signLearned, signLettersLearned, signLettersTotal,
     };
   }
   function award(n, kind) {
@@ -190,7 +202,7 @@
     const isHome = state.view === 'home';
     topbar.hidden = false;
     backBtn.style.visibility = isHome ? 'hidden' : 'visible';
-    const map = { home: renderHome, themes: renderThemes, lesson: renderLesson, review: renderReview, stats: renderStats, achievements: renderAchievements, dialogues: renderDialogues, dialogue: renderDialogue, quiz: renderQuiz };
+    const map = { home: renderHome, themes: renderThemes, lesson: renderLesson, review: renderReview, stats: renderStats, achievements: renderAchievements, dialogues: renderDialogues, dialogue: renderDialogue, quiz: renderQuiz, morse: renderMorseHub, morselearn: renderMorseLearn, morsequiz: renderMorseQuiz, morsetrans: renderMorseTrans, sign: renderSignHub, signlearn: renderSignLearn, signquiz: renderSignQuiz, signspell: renderSignSpell };
     (map[state.view] || renderHome)();
     updatePlayerChip();
   }
@@ -226,6 +238,13 @@
       grid.appendChild(card);
     });
     wrap.appendChild(grid);
+
+    // other ways to communicate
+    wrap.appendChild(el('div', 'section-label', 'Beyond speech'));
+    const beyond = el('div', 'lang-grid');
+    beyond.appendChild(trackCard('morse', '📡', 'Morse Code', trackPct('morse', MORSE.items.length) + '% · dots & dashes', () => go('morse')));
+    beyond.appendChild(trackCard('sign', '🤟', 'ASL Fingerspelling', trackPct('sign', SIGN.items.length) + '% · the manual alphabet', () => go('sign')));
+    wrap.appendChild(beyond);
 
     // global nav
     const nav = el('div', 'home-nav');
@@ -589,6 +608,8 @@
       row.style.cursor = 'pointer'; row.addEventListener('click', () => go('themes', { code }));
       mastery.appendChild(row);
     });
+    mastery.appendChild(masteryRow('📡', 'Morse Code', s.morseLearned, MORSE.items.length, () => go('morse')));
+    mastery.appendChild(masteryRow('🤟', 'ASL Fingerspelling', s.signLearned, SIGN.items.length, () => go('sign')));
     mP.appendChild(mastery);
     wrap.appendChild(mP);
 
@@ -863,6 +884,471 @@
     again.addEventListener('click', () => { quiz._awarded = false; startQuiz(quiz.code); }); back2.addEventListener('click', () => go('themes', { code: quiz.code }));
     nav.appendChild(again); nav.appendChild(back2); wrap.appendChild(nav);
     views.replaceChildren(wrap);
+  }
+
+  /* ===================== shared track helpers ===================== */
+  function trackLearnedCount(code) { const lp = langProg(code).learned; return Object.keys(lp).filter(id => lp[id]).length; }
+  function trackPct(code, total) { if (!total) return 0; return Math.round(trackLearnedCount(code) / total * 100); }
+  function trackCard(code, icon, title, sub, onClick) {
+    const card = el('button', 'lang-card');
+    card.appendChild(el('div', 'flag', icon));
+    const info = el('div');
+    info.appendChild(el('div', 'name', title));
+    info.appendChild(el('div', 'native', sub));
+    const total = code === 'morse' ? MORSE.items.length : SIGN.items.length;
+    const pct = trackPct(code, total);
+    const bar = el('div', 'bar'); const fill = el('i'); fill.style.width = pct + '%'; bar.appendChild(fill); info.appendChild(bar);
+    info.appendChild(el('div', 'pct', pct > 0 ? pct + '% learned' : 'Start →'));
+    card.appendChild(info);
+    card.addEventListener('click', onClick);
+    return card;
+  }
+  function masteryRow(icon, name, n, total, onClick) {
+    const pct = total ? Math.round(n / total * 100) : 0;
+    const row = el('div', 'mrow');
+    row.appendChild(el('div', 'mflag', icon));
+    const mid = el('div', 'mmid');
+    const nm = el('div', 'mname'); nm.innerHTML = name + '<span>' + n + '/' + total + ' · ' + pct + '%</span>'; mid.appendChild(nm);
+    const bar = el('div', 'mbar'); const f = el('i'); f.style.width = pct + '%'; bar.appendChild(f); mid.appendChild(bar);
+    row.appendChild(mid);
+    if (onClick) { row.style.cursor = 'pointer'; row.addEventListener('click', onClick); }
+    return row;
+  }
+  function trackGroupGrid(items, groups, code, onPick) {
+    const grid = el('div', 'theme-grid');
+    groups.forEach(gp => {
+      const gi = items.filter(i => i.group === gp.id); const lp = langProg(code);
+      const done = gi.filter(i => lp.learned[i.id]).length; const pct = gi.length ? Math.round(done / gi.length * 100) : 0;
+      const card = el('button', 'theme-card');
+      card.appendChild(el('div', 'ic', gp.icon)); card.appendChild(el('div', 'tt', gp.title));
+      const meta = el('div', 'meta'); const ring = el('div', 'ring' + (pct >= 100 ? ' done' : '')); ring.style.setProperty('--p', pct);
+      if (pct >= 100) ring.textContent = ''; meta.appendChild(ring); meta.appendChild(el('div', 'cnt', done + ' / ' + gi.length)); card.appendChild(meta);
+      card.addEventListener('click', () => onPick(gp.id));
+      grid.appendChild(card);
+    });
+    return grid;
+  }
+
+  /* ===================== MORSE ===================== */
+  const MORSE_MAP = {};
+  MORSE.items.forEach(i => { if (i.char && i.char.length === 1) MORSE_MAP[i.char.toUpperCase()] = i.pattern; });
+
+  const MorseAudio = {
+    ctx: null, freq: 620, wpm: 13,
+    ensure() { try { if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)(); if (this.ctx.state === 'suspended') this.ctx.resume(); } catch (e) { this.ctx = null; } return this.ctx; },
+    unit(slow) { return (1.2 / this.wpm) * (slow ? 1.9 : 1); },
+    _tone(g, t, on) { g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.28, t + 0.006); g.gain.setValueAtTime(0.28, t + on - 0.006); g.gain.exponentialRampToValueAtTime(0.0001, t + on); },
+    playPattern(pattern, slow) {
+      const ctx = this.ensure(); if (!ctx) return 0;
+      const u = this.unit(slow); let t = ctx.currentTime + 0.06;
+      const osc = ctx.createOscillator(); const g = ctx.createGain(); osc.type = 'sine'; osc.frequency.value = this.freq; osc.connect(g); g.connect(ctx.destination);
+      g.gain.setValueAtTime(0.0001, ctx.currentTime); osc.start();
+      for (const sym of pattern) { if (sym !== '.' && sym !== '-') continue; const on = (sym === '-' ? 3 : 1) * u; this._tone(g, t, on); t += on + u; }
+      osc.stop(t + 0.05); return t - ctx.currentTime;
+    },
+    playText(text, slow) {
+      const ctx = this.ensure(); if (!ctx) return 0;
+      const u = this.unit(slow); let t = ctx.currentTime + 0.06;
+      const osc = ctx.createOscillator(); const g = ctx.createGain(); osc.type = 'sine'; osc.frequency.value = this.freq; osc.connect(g); g.connect(ctx.destination);
+      g.gain.setValueAtTime(0.0001, ctx.currentTime); osc.start();
+      const words = String(text).toUpperCase().trim().split(/\s+/);
+      words.forEach((w) => {
+        w.split('').forEach((ch) => {
+          const pat = MORSE_MAP[ch]; if (!pat) return;
+          for (const sym of pat) { const on = (sym === '-' ? 3 : 1) * u; this._tone(g, t, on); t += on + u; }
+          t += 2 * u; // char gap (total 3u)
+        });
+        t += 4 * u; // word gap (total 7u)
+      });
+      osc.stop(t + 0.05); return t - ctx.currentTime;
+    },
+  };
+
+  function morsePatternEl(pattern, big) {
+    const w = el('div', 'morse-pattern' + (big ? ' big' : ''));
+    for (const sym of pattern) { if (sym === '.') w.appendChild(el('span', 'dot')); else if (sym === '-') w.appendChild(el('span', 'dash')); }
+    return w;
+  }
+  function prettyPattern(pattern) { return pattern.replace(/\./g, '·').replace(/-/g, '−'); }
+
+  function renderMorseHub() {
+    crumb.textContent = 'Morse Code';
+    const wrap = el('div');
+    const head = el('div', 'lang-head'); head.appendChild(el('div', 'flag', '📡'));
+    const ht = el('div'); ht.appendChild(el('div', 't', 'Morse Code'));
+    ht.appendChild(el('div', 's', trackPct('morse', MORSE.items.length) + '% learned · hear the dots & dashes')); head.appendChild(ht); wrap.appendChild(head);
+    const modes = el('div', 'modes');
+    modes.appendChild(modeCard('📖', 'Learn', 'see & hear', () => startMorseLearn('letters')));
+    modes.appendChild(modeCard('🎧', 'Decode', 'listen & guess', () => startMorseQuiz()));
+    modes.appendChild(modeCard('🔤', 'Translator', 'text ↔ code', () => go('morsetrans')));
+    modes.appendChild(modeCard('📊', 'Progress', 'your stats', () => go('stats')));
+    wrap.appendChild(modes);
+    wrap.appendChild(el('div', 'section-label', 'Learn by set'));
+    wrap.appendChild(trackGroupGrid(MORSE.items, MORSE.groups, 'morse', startMorseLearn));
+    views.replaceChildren(wrap);
+  }
+
+  const morseLesson = { items: [], idx: 0, groupId: null, perf: null };
+  function startMorseLearn(groupId) {
+    morseLesson.items = MORSE.items.filter(i => i.group === groupId).slice();
+    morseLesson.idx = 0; morseLesson.groupId = groupId; morseLesson.perf = {};
+    go('morselearn', {});
+  }
+  function renderMorseLearn() {
+    const items = morseLesson.items;
+    const gp = MORSE.groups.find(g => g.id === morseLesson.groupId) || {};
+    crumb.textContent = 'Morse · ' + (gp.title || '');
+    if (morseLesson.idx >= items.length) return renderMorseDone();
+    const item = items[morseLesson.idx];
+    const wrap = el('div');
+    const pt = el('div', 'progress-top'); const bar = el('div', 'bar'); const fill = el('i'); fill.style.width = (morseLesson.idx / items.length * 100) + '%'; bar.appendChild(fill);
+    pt.appendChild(bar); pt.appendChild(el('div', 'num', (morseLesson.idx + 1) + ' / ' + items.length)); wrap.appendChild(pt);
+
+    const card = el('div', 'card');
+    card.appendChild(el('div', 'morse-char', item.char));
+    card.appendChild(morsePatternEl(item.pattern, true));
+    card.appendChild(el('div', 'phon', item.name));
+    if (item.mnem) card.appendChild(el('div', 'note-pin', 'rhythm: ' + item.mnem));
+    const row = el('div', 'speak-row');
+    const playBtn = el('button', 'btn play', '🔊 Play'); const slowBtn = el('button', 'btn ghost', '🐢 Slow');
+    row.appendChild(playBtn); row.appendChild(slowBtn); card.appendChild(row);
+
+    card.appendChild(el('div', 'tap-label', 'Tap it back:'));
+    const tapOut = el('div', 'tap-out');
+    const tapBtns = el('div', 'tap-btns');
+    const dit = el('button', 'btn tapbtn', '· dit'); const dah = el('button', 'btn tapbtn', '− dah'); const clr = el('button', 'btn ghost', '⌫');
+    tapBtns.appendChild(dit); tapBtns.appendChild(dah); tapBtns.appendChild(clr);
+    card.appendChild(tapOut); card.appendChild(tapBtns);
+    const fb = el('div', 'feedback'); card.appendChild(fb);
+    wrap.appendChild(card);
+
+    const nav = el('div', 'nav-row');
+    const skip = el('button', 'btn sec', 'Skip'); const next = el('button', 'btn primary', (morseLesson.idx === items.length - 1 ? 'Finish ✓' : 'Next →'));
+    nav.appendChild(skip); nav.appendChild(next); wrap.appendChild(nav);
+    views.replaceChildren(wrap);
+
+    setTimeout(() => MorseAudio.playPattern(item.pattern), 320);
+    playBtn.addEventListener('click', () => MorseAudio.playPattern(item.pattern));
+    slowBtn.addEventListener('click', () => MorseAudio.playPattern(item.pattern, true));
+
+    let input = '';
+    function drawTap() { tapOut.replaceChildren(); if (!input) { tapOut.appendChild(el('span', 'tap-ph', 'tap · and − to match')); return; } for (const s of input) tapOut.appendChild(s === '.' ? el('span', 'dot') : el('span', 'dash')); }
+    drawTap();
+    function addSym(s) { if (input.length >= item.pattern.length) input = ''; input += s; drawTap(); MorseAudio.playPattern(s); if (input.length >= item.pattern.length) check(); }
+    dit.addEventListener('click', () => addSym('.'));
+    dah.addEventListener('click', () => addSym('-'));
+    clr.addEventListener('click', () => { input = ''; drawTap(); fb.className = 'feedback'; });
+    function check() {
+      if (input === item.pattern) { fb.className = 'feedback show good'; fb.innerHTML = '🎉 Correct rhythm!'; if (!morseLesson.perf[item.id]) { morseLesson.perf[item.id] = 1; award(2, 'try'); } }
+      else { fb.className = 'feedback show bad'; fb.innerHTML = '❌ It\'s <b>' + prettyPattern(item.pattern) + '</b> — tap ⌫ and retry.'; }
+    }
+    function advance() { const was = langProg('morse').learned[item.id]; markLearned('morse', item.id); if (!was) award(6, 'word'); else if (G) G.evaluate(gatherStats()); morseLesson.idx++; renderMorseLearn(); }
+    next.addEventListener('click', advance);
+    skip.addEventListener('click', () => { morseLesson.idx++; renderMorseLearn(); });
+  }
+  function renderMorseDone() {
+    crumb.textContent = 'Morse · done';
+    const wrap = el('div', 'done');
+    wrap.appendChild(el('div', 'big', '📡'));
+    wrap.appendChild(el('h2', null, 'Set complete!'));
+    wrap.appendChild(el('p', null, 'Great work. Test yourself with the Decode challenge, or send a message in the Translator.'));
+    const nav = el('div', 'nav-row'); nav.style.maxWidth = '440px'; nav.style.margin = '10px auto 0';
+    const q = el('button', 'btn sec', '🎧 Decode'); const back2 = el('button', 'btn primary', 'More sets →');
+    q.addEventListener('click', () => startMorseQuiz()); back2.addEventListener('click', () => go('morse'));
+    nav.appendChild(q); nav.appendChild(back2); wrap.appendChild(nav);
+    views.replaceChildren(wrap);
+  }
+
+  const morseQuiz = { qs: [], idx: 0, correct: 0, _awarded: false };
+  function startMorseQuiz() {
+    const pool = MORSE.items.filter(i => i.group === 'letters' || i.group === 'numbers');
+    const lp = langProg('morse'); let learned = pool.filter(i => lp.learned[i.id]); if (learned.length < 4) learned = pool;
+    const chosen = shuffle(learned).slice(0, Math.min(10, learned.length));
+    morseQuiz.qs = chosen.map(item => { const others = shuffle(pool.filter(x => x.id !== item.id)).slice(0, 3); return { item, opts: shuffle([item].concat(others)) }; });
+    morseQuiz.idx = 0; morseQuiz.correct = 0; morseQuiz._awarded = false;
+    go('morsequiz', {});
+  }
+  function renderMorseQuiz() {
+    crumb.textContent = 'Morse · Decode';
+    if (morseQuiz.idx >= morseQuiz.qs.length) return renderMorseQuizDone();
+    const q = morseQuiz.qs[morseQuiz.idx]; const item = q.item;
+    const wrap = el('div');
+    const pt = el('div', 'progress-top'); const bar = el('div', 'bar'); const fill = el('i'); fill.style.width = (morseQuiz.idx / morseQuiz.qs.length * 100) + '%'; bar.appendChild(fill);
+    pt.appendChild(bar); pt.appendChild(el('div', 'num', (morseQuiz.idx + 1) + ' / ' + morseQuiz.qs.length)); wrap.appendChild(pt);
+    const dots = el('div', 'qscore'); morseQuiz.qs.forEach(x => dots.appendChild(el('div', 'qdot' + (x._res === true ? ' ok' : x._res === false ? ' no' : '')))); wrap.appendChild(dots);
+    const card = el('div', 'card');
+    card.appendChild(el('div', 'quiz-q', '🎧 Which character?'));
+    const rep = el('button', 'btn play', '🔊 Play again'); rep.style.margin = '0 auto 10px'; rep.addEventListener('click', () => MorseAudio.playPattern(item.pattern)); card.appendChild(rep);
+    card.appendChild(morsePatternEl(item.pattern, true));
+    const grid = el('div', 'q-options'); grid.style.marginTop = '16px';
+    let done = false;
+    q.opts.forEach(opt => {
+      const b = el('button', 'q-opt'); b.textContent = opt.char;
+      b.addEventListener('click', () => {
+        if (done) return; done = true; const ok = opt.id === item.id; q._res = ok;
+        if (ok) { morseQuiz.correct++; award(5, 'quiz'); markLearned('morse', item.id); }
+        Array.from(grid.children).forEach(c => { c.disabled = true; });
+        b.classList.add(ok ? 'correct' : 'wrong');
+        if (!ok) Array.from(grid.children).forEach((c, i) => { if (q.opts[i].id === item.id) c.classList.add('correct'); });
+        MorseAudio.playPattern(item.pattern);
+        const nx = el('div', 'nav-row'); nx.style.marginTop = '16px'; const nb = el('button', 'btn primary', morseQuiz.idx === morseQuiz.qs.length - 1 ? 'Finish ✓' : 'Next →');
+        nb.addEventListener('click', () => { morseQuiz.idx++; renderMorseQuiz(); }); nx.appendChild(nb); card.appendChild(nx);
+      });
+      grid.appendChild(b);
+    });
+    card.appendChild(grid); wrap.appendChild(card);
+    views.replaceChildren(wrap);
+    setTimeout(() => MorseAudio.playPattern(item.pattern), 320);
+  }
+  function renderMorseQuizDone() {
+    const total = morseQuiz.qs.length; const pct = total ? Math.round(morseQuiz.correct / total * 100) : 0;
+    if (!morseQuiz._awarded) { morseQuiz._awarded = true; award(5 + Math.round(pct / 10), 'quiz'); }
+    crumb.textContent = 'Morse · Decode';
+    const wrap = el('div', 'done');
+    wrap.appendChild(el('div', 'big', pct >= 80 ? '🏆' : pct >= 50 ? '💪' : '🌱'));
+    wrap.appendChild(el('h2', null, morseQuiz.correct + ' / ' + total + ' correct'));
+    wrap.appendChild(el('p', null, pct >= 80 ? 'Sharp ears! You\'re reading Morse by sound.' : 'Keep practising — replay the audio and listen for the rhythm.'));
+    const nav = el('div', 'nav-row'); nav.style.maxWidth = '440px'; nav.style.margin = '10px auto 0';
+    const again = el('button', 'btn sec', '🔁 New round'); const back2 = el('button', 'btn primary', 'Back →');
+    again.addEventListener('click', () => startMorseQuiz()); back2.addEventListener('click', () => go('morse'));
+    nav.appendChild(again); nav.appendChild(back2); wrap.appendChild(nav);
+    views.replaceChildren(wrap);
+  }
+
+  function renderMorseTrans() {
+    crumb.textContent = 'Morse · Translator';
+    const wrap = el('div');
+    const head = el('div', 'lang-head'); head.appendChild(el('div', 'flag', '🔤'));
+    const ht = el('div'); ht.appendChild(el('div', 't', 'Translator')); ht.appendChild(el('div', 's', 'Type text to see and hear it in Morse.')); head.appendChild(ht); wrap.appendChild(head);
+    const panel = el('div', 'panel');
+    const ta = document.createElement('textarea'); ta.className = 'trans-input'; ta.setAttribute('placeholder', 'Type a message…'); ta.value = 'SOS';
+    panel.appendChild(ta);
+    const out = el('div', 'trans-out'); panel.appendChild(out);
+    const ctrl = el('div', 'trans-ctrl');
+    const playBtn = el('button', 'btn mic', '▶ Play'); const slowBtn = el('button', 'btn ghost', '🐢 Slow: off');
+    ctrl.appendChild(playBtn); ctrl.appendChild(slowBtn); panel.appendChild(ctrl);
+    wrap.appendChild(panel);
+    const ref = el('div', 'panel'); ref.appendChild(el('h3', null, 'Common abbreviations'));
+    const list = el('div', 'abbr'); (MORSE.abbrev || []).forEach(a => { const r = el('div', 'abbr-row'); r.innerHTML = '<b>' + a.t + '</b>' + morsePatternText(a.t) + '<span>' + a.d + '</span>'; list.appendChild(r); }); ref.appendChild(list); wrap.appendChild(ref);
+    views.replaceChildren(wrap);
+
+    let slow = false, awarded = false;
+    function toMorse(text) { return String(text).toUpperCase().split('').map(ch => { if (ch === ' ') return '/'; const p = MORSE_MAP[ch]; return p ? prettyPattern(p) : (ch.trim() ? '·?·' : ''); }).filter(Boolean).join('   '); }
+    function refresh() { out.textContent = ta.value.trim() ? toMorse(ta.value) : '·−·· …'; }
+    ta.addEventListener('input', refresh); refresh();
+    playBtn.addEventListener('click', () => { MorseAudio.playText(ta.value, slow); if (!awarded) { awarded = true; award(3, 'quiz'); } });
+    slowBtn.addEventListener('click', () => { slow = !slow; slowBtn.textContent = '🐢 Slow: ' + (slow ? 'on' : 'off'); });
+  }
+  function morsePatternText(word) { const p = word.toUpperCase().split('').map(c => MORSE_MAP[c] ? prettyPattern(MORSE_MAP[c]) : '').filter(Boolean).join(' '); return p ? ' <i>' + p + '</i> ' : ' '; }
+
+  /* ===================== SIGN (ASL fingerspelling) ===================== */
+  const SIGN_MAP = {}; SIGN.items.forEach(i => { SIGN_MAP[i.char.toUpperCase()] = i; });
+  let signTimer = null;
+  function clearSignTimer() { if (signTimer) { clearInterval(signTimer); signTimer = null; } }
+
+  function signHand(cfg) {
+    cfg = cfg || {};
+    const W = 150, H = 180;
+    let s = '<svg viewBox="0 0 ' + W + ' ' + H + '" class="hand-svg" xmlns="http://www.w3.org/2000/svg">';
+    const wrist = '<rect class="hf" x="54" y="150" width="46" height="24" rx="10"/>';
+    if (cfg.shape === 'O') { s += '<circle class="ho" cx="76" cy="86" r="40"/>' + wrist + '</svg>'; return s; }
+    if (cfg.shape === 'C') { s += '<path class="hc" d="M 108 55 A 44 44 0 1 0 108 121"/>' + wrist + '</svg>'; return s; }
+    const palmTop = 92, palmBot = 150;
+    s += '<rect class="hf" x="48" y="' + palmTop + '" width="60" height="' + (palmBot - palmTop) + '" rx="18"/>';
+    const fx = { i: 60, m: 76, r: 92, p: 106 };
+    const tops = { i: 34, m: 30, r: 40, p: 54 };
+    const baseY = palmTop + 8;
+    ['i', 'm', 'r', 'p'].forEach(fk => {
+      const st = cfg[fk] || 'curl'; let top;
+      if (st === 'up') top = tops[fk];
+      else if (st === 'half') top = baseY - 30;
+      else if (st === 'hook') top = baseY - 32;
+      else top = baseY - 14;
+      const w = fk === 'p' ? 11 : 13; const cx = fx[fk];
+      s += '<rect class="hf" x="' + (cx - w / 2) + '" y="' + top + '" width="' + w + '" height="' + (baseY - top + 12) + '" rx="' + (w / 2) + '"/>';
+      if (st === 'hook') s += '<rect class="hf" x="' + (cx - w / 2) + '" y="' + (top - 3) + '" width="' + w + '" height="13" rx="' + (w / 2) + '" transform="rotate(38 ' + cx + ' ' + top + ')"/>';
+    });
+    // thumb
+    const th = cfg.thumb || 'side';
+    if (th === 'out') s += '<rect class="hf" x="16" y="98" width="34" height="14" rx="7"/>';
+    else if (th === 'across') s += '<rect class="hf" x="50" y="120" width="48" height="14" rx="7"/>';
+    else if (th === 'up') s += '<rect class="hf" x="64" y="64" width="12" height="36" rx="6"/>';
+    else if (th === 'tuck1' || th === 'tuck2' || th === 'tuck3' || th === 'tuck') s += '<rect class="hf" x="42" y="112" width="13" height="18" rx="6"/>';
+    else s += '<rect class="hf" x="38" y="104" width="14" height="36" rx="7"/>'; // side
+    // decorative touch circles
+    if (cfg.shape === 'circleF' || cfg.shape === 'circleD') s += '<circle class="hl" cx="' + fx.i + '" cy="' + (palmTop - 4) + '" r="10"/>';
+    if (cfg.shape === 'touchP') s += '<circle class="hl" cx="' + fx.p + '" cy="' + (baseY - 12) + '" r="9"/>';
+    if (cfg.shape === 'touchR') s += '<circle class="hl" cx="' + fx.r + '" cy="' + (baseY - 12) + '" r="9"/>';
+    if (cfg.shape === 'touchM') s += '<circle class="hl" cx="' + fx.m + '" cy="' + (baseY - 12) + '" r="9"/>';
+    if (cfg.shape === 'cross') s += '<line class="hx" x1="' + (fx.i - 4) + '" y1="' + (tops.i + 6) + '" x2="' + (fx.m + 4) + '" y2="' + (tops.m + 22) + '"/>';
+    s += wrist + '</svg>';
+    return s;
+  }
+  function handEl(cfg, cls) { const d = el('div', 'hand ' + (cls || '')); d.innerHTML = signHand(cfg); return d; }
+
+  function renderSignHub() {
+    crumb.textContent = 'ASL Fingerspelling';
+    const wrap = el('div');
+    const head = el('div', 'lang-head'); head.appendChild(el('div', 'flag', '🤟'));
+    const ht = el('div'); ht.appendChild(el('div', 't', 'ASL Fingerspelling'));
+    ht.appendChild(el('div', 's', trackPct('sign', SIGN.items.length) + '% learned · the American manual alphabet')); head.appendChild(ht); wrap.appendChild(head);
+    const noteC = el('div', 'method'); noteC.style.marginBottom = '14px';
+    noteC.appendChild(el('p', null, '👐 ' + (SIGN.note || '')));
+    wrap.appendChild(noteC);
+    const modes = el('div', 'modes');
+    modes.appendChild(modeCard('📖', 'Alphabet', 'A–Z', () => startSignLearn('alphabet')));
+    modes.appendChild(modeCard('🔢', 'Numbers', '0–9', () => startSignLearn('numbers')));
+    modes.appendChild(modeCard('🔤', 'Fingerspell', 'any word', () => go('signspell')));
+    modes.appendChild(modeCard('🎯', 'Quiz', 'name the sign', () => startSignQuiz()));
+    wrap.appendChild(modes);
+    views.replaceChildren(wrap);
+  }
+
+  const signLesson = { items: [], idx: 0, groupId: null };
+  function startSignLearn(groupId) {
+    signLesson.items = SIGN.items.filter(i => i.group === groupId).slice();
+    signLesson.idx = 0; signLesson.groupId = groupId;
+    go('signlearn', {});
+  }
+  function renderSignLearn() {
+    const items = signLesson.items;
+    const gp = SIGN.groups.find(g => g.id === signLesson.groupId) || {};
+    crumb.textContent = 'ASL · ' + (gp.title || '');
+    if (signLesson.idx >= items.length) return renderSignDone();
+    const item = items[signLesson.idx];
+    const wrap = el('div');
+    const pt = el('div', 'progress-top'); const bar = el('div', 'bar'); const fill = el('i'); fill.style.width = (signLesson.idx / items.length * 100) + '%'; bar.appendChild(fill);
+    pt.appendChild(bar); pt.appendChild(el('div', 'num', (signLesson.idx + 1) + ' / ' + items.length)); wrap.appendChild(pt);
+
+    const card = el('div', 'card');
+    card.appendChild(handEl(item.cfg, 'big'));
+    card.appendChild(el('div', 'target', item.char));
+    if (item.motion) card.appendChild(el('div', 'motion-badge', '✍️ involves motion'));
+    card.appendChild(el('div', 'sign-desc', item.desc));
+    wrap.appendChild(card);
+
+    const nav = el('div', 'nav-row');
+    const skip = el('button', 'btn sec', 'Skip'); const next = el('button', 'btn primary', (signLesson.idx === items.length - 1 ? 'Finish ✓' : 'Got it →'));
+    nav.appendChild(skip); nav.appendChild(next); wrap.appendChild(nav);
+    wrap.appendChild(el('div', 'hint', 'Form the shape with your hand, then continue. Diagrams are a schematic guide — watch video for exact form.'));
+    views.replaceChildren(wrap);
+
+    function advance() { const was = langProg('sign').learned[item.id]; markLearned('sign', item.id); if (!was) award(6, 'word'); else if (G) G.evaluate(gatherStats()); signLesson.idx++; renderSignLearn(); }
+    next.addEventListener('click', advance);
+    skip.addEventListener('click', () => { signLesson.idx++; renderSignLearn(); });
+  }
+  function renderSignDone() {
+    crumb.textContent = 'ASL · done';
+    const wrap = el('div', 'done');
+    wrap.appendChild(el('div', 'big', '🤟'));
+    wrap.appendChild(el('h2', null, 'Set complete!'));
+    wrap.appendChild(el('p', null, 'Nice. Try the Quiz to test your recognition, or fingerspell your own name.'));
+    const nav = el('div', 'nav-row'); nav.style.maxWidth = '440px'; nav.style.margin = '10px auto 0';
+    const q = el('button', 'btn sec', '🎯 Quiz'); const back2 = el('button', 'btn primary', 'Back →');
+    q.addEventListener('click', () => startSignQuiz()); back2.addEventListener('click', () => go('sign'));
+    nav.appendChild(q); nav.appendChild(back2); wrap.appendChild(nav);
+    views.replaceChildren(wrap);
+  }
+
+  const signQuiz = { qs: [], idx: 0, correct: 0, _awarded: false };
+  function startSignQuiz() {
+    const pool = SIGN.items.filter(i => i.group === 'alphabet');
+    const lp = langProg('sign'); let learned = pool.filter(i => lp.learned[i.id]); if (learned.length < 4) learned = pool;
+    const chosen = shuffle(learned).slice(0, Math.min(10, learned.length));
+    signQuiz.qs = chosen.map(item => { const others = shuffle(pool.filter(x => x.id !== item.id)).slice(0, 3); return { item, opts: shuffle([item].concat(others)) }; });
+    signQuiz.idx = 0; signQuiz.correct = 0; signQuiz._awarded = false;
+    go('signquiz', {});
+  }
+  function renderSignQuiz() {
+    crumb.textContent = 'ASL · Quiz';
+    if (signQuiz.idx >= signQuiz.qs.length) return renderSignQuizDone();
+    const q = signQuiz.qs[signQuiz.idx]; const item = q.item;
+    const wrap = el('div');
+    const pt = el('div', 'progress-top'); const bar = el('div', 'bar'); const fill = el('i'); fill.style.width = (signQuiz.idx / signQuiz.qs.length * 100) + '%'; bar.appendChild(fill);
+    pt.appendChild(bar); pt.appendChild(el('div', 'num', (signQuiz.idx + 1) + ' / ' + signQuiz.qs.length)); wrap.appendChild(pt);
+    const dots = el('div', 'qscore'); signQuiz.qs.forEach(x => dots.appendChild(el('div', 'qdot' + (x._res === true ? ' ok' : x._res === false ? ' no' : '')))); wrap.appendChild(dots);
+    const card = el('div', 'card');
+    card.appendChild(el('div', 'quiz-q', 'Which letter is this?'));
+    card.appendChild(handEl(item.cfg, 'big'));
+    if (item.motion) card.appendChild(el('div', 'motion-badge', '✍️ involves motion'));
+    const grid = el('div', 'q-options'); grid.style.marginTop = '14px';
+    let done = false;
+    q.opts.forEach(opt => {
+      const b = el('button', 'q-opt'); b.textContent = opt.char;
+      b.addEventListener('click', () => {
+        if (done) return; done = true; const ok = opt.id === item.id; q._res = ok;
+        if (ok) { signQuiz.correct++; award(5, 'quiz'); markLearned('sign', item.id); }
+        Array.from(grid.children).forEach(c => { c.disabled = true; });
+        b.classList.add(ok ? 'correct' : 'wrong');
+        if (!ok) Array.from(grid.children).forEach((c, i) => { if (q.opts[i].id === item.id) c.classList.add('correct'); });
+        const nx = el('div', 'nav-row'); nx.style.marginTop = '16px'; const nb = el('button', 'btn primary', signQuiz.idx === signQuiz.qs.length - 1 ? 'Finish ✓' : 'Next →');
+        nb.addEventListener('click', () => { signQuiz.idx++; renderSignQuiz(); }); nx.appendChild(nb); card.appendChild(nx);
+      });
+      grid.appendChild(b);
+    });
+    card.appendChild(grid); wrap.appendChild(card);
+    views.replaceChildren(wrap);
+  }
+  function renderSignQuizDone() {
+    const total = signQuiz.qs.length; const pct = total ? Math.round(signQuiz.correct / total * 100) : 0;
+    if (!signQuiz._awarded) { signQuiz._awarded = true; award(5 + Math.round(pct / 10), 'quiz'); }
+    crumb.textContent = 'ASL · Quiz';
+    const wrap = el('div', 'done');
+    wrap.appendChild(el('div', 'big', pct >= 80 ? '🏆' : pct >= 50 ? '💪' : '🌱'));
+    wrap.appendChild(el('h2', null, signQuiz.correct + ' / ' + total + ' correct'));
+    wrap.appendChild(el('p', null, pct >= 80 ? 'Excellent recognition!' : 'Keep going — review the alphabet and try again.'));
+    const nav = el('div', 'nav-row'); nav.style.maxWidth = '440px'; nav.style.margin = '10px auto 0';
+    const again = el('button', 'btn sec', '🔁 New round'); const back2 = el('button', 'btn primary', 'Back →');
+    again.addEventListener('click', () => startSignQuiz()); back2.addEventListener('click', () => go('sign'));
+    nav.appendChild(again); nav.appendChild(back2); wrap.appendChild(nav);
+    views.replaceChildren(wrap);
+  }
+
+  function renderSignSpell() {
+    clearSignTimer();
+    crumb.textContent = 'ASL · Fingerspell';
+    const wrap = el('div');
+    const head = el('div', 'lang-head'); head.appendChild(el('div', 'flag', '🔤'));
+    const ht = el('div'); ht.appendChild(el('div', 't', 'Fingerspell')); ht.appendChild(el('div', 's', 'Type a word to see it signed, letter by letter.')); head.appendChild(ht); wrap.appendChild(head);
+    const panel = el('div', 'panel');
+    const ta = document.createElement('input'); ta.type = 'text'; ta.className = 'trans-input'; ta.setAttribute('placeholder', 'Type a word or name…'); ta.value = 'HELLO'; ta.maxLength = 24;
+    panel.appendChild(ta);
+    const ctrl = el('div', 'trans-ctrl');
+    const playBtn = el('button', 'btn mic', '▶ Step through'); ctrl.appendChild(playBtn); panel.appendChild(ctrl);
+    const out = el('div', 'spell-out'); panel.appendChild(out);
+    wrap.appendChild(panel);
+    views.replaceChildren(wrap);
+
+    let awarded = false;
+    function build() {
+      out.replaceChildren();
+      const chars = String(ta.value).toUpperCase().split('');
+      chars.forEach(ch => {
+        if (ch === ' ') { out.appendChild(el('div', 'spell-gap')); return; }
+        const item = SIGN_MAP[ch]; if (!item) return;
+        const cell = el('div', 'spell-cell');
+        cell.appendChild(handEl(item.cfg, 'mini'));
+        cell.appendChild(el('div', 'spell-l', item.char));
+        out.appendChild(cell);
+      });
+    }
+    ta.addEventListener('input', build); build();
+    playBtn.addEventListener('click', () => {
+      clearSignTimer();
+      const cells = Array.from(out.querySelectorAll('.spell-cell'));
+      if (!cells.length) return;
+      cells.forEach(c => c.classList.remove('on'));
+      let i = 0;
+      cells[0].classList.add('on');
+      signTimer = setInterval(() => {
+        if (!document.body.contains(out)) { clearSignTimer(); return; }
+        cells.forEach(c => c.classList.remove('on'));
+        i++;
+        if (i >= cells.length) { clearSignTimer(); return; }
+        cells[i].classList.add('on');
+      }, 700);
+      if (!awarded) { awarded = true; award(3, 'quiz'); }
+    });
   }
 
   /* ---------- boot ---------- */
