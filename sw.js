@@ -1,9 +1,11 @@
 /* Palteca service worker — offline app shell. */
-const CACHE = 'palteca-v4';
+const CACHE = 'palteca-v5';
+// Relative paths so the app works both at localhost root and under a
+// GitHub Pages subpath (e.g. /palteca/). Resolved against the SW's scope.
 const ASSETS = [
-  '/', '/index.html', '/styles.css',
-  '/store.js', '/content.js', '/dialogues.js', '/morse.js', '/sign.js', '/app.js',
-  '/icon.svg', '/manifest.webmanifest',
+  './', './index.html', './styles.css',
+  './store.js', './content.js', './dialogues.js', './morse.js', './sign.js', './app.js',
+  './icon.svg', './manifest.webmanifest',
 ];
 
 self.addEventListener('install', (e) => {
@@ -22,7 +24,7 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
   // Network-first for navigations (fresh HTML), cache fallback offline.
   if (req.mode === 'navigate') {
-    e.respondWith(fetch(req).then((r) => { cachePut(req, r.clone()); return r; }).catch(() => caches.match('/index.html')));
+    e.respondWith(fetch(req).then((r) => { cachePut(req, r.clone()); return r; }).catch(() => caches.match('./index.html') || caches.match('./')));
     return;
   }
   // Cache-first for static assets, revalidate in background.
